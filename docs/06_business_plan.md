@@ -62,52 +62,67 @@ SRE 用（技術 SLI）／事業用（KPI）を分離、経営レビュー月次
 
 ## 4. 月次ランニングコスト試算
 
-為替・API 単価は 2026 Q2 想定値。概算レンジで示す。
+為替 1 USD = 150 円、2026 Q2 の AWS / Claude API 単価目安。ap-northeast-1。
 
-### 4.1 Phase 1（50 名 / 月 200 提案書）
+### 4.1 設計方針
 
-| 項目 | 詳細 | 月額（円） |
-|---|---|---:|
-| ECS Fargate | API 2 tasks + Worker 4 tasks（平均） | 45,000 |
-| RDS Aurora Serverless v2 | ACU 2〜8 | 35,000 |
-| S3 + CloudFront | 100GB + 配信 500GB | 8,000 |
-| ElastiCache | 小 | 10,000 |
-| CloudWatch / Datadog | APM + Logs | 25,000 |
-| Cognito | MAU 50 | 2,000 |
-| KMS / Secrets Manager | 数件 | 3,000 |
-| WAF | ルール数少 | 6,000 |
-| Claude API | §4.3 参照 | 55,000 |
-| フォント / ソフト | Noto CJK = 無償、LibreOffice = 無償 | 0 |
-| **合計** | | **約 19 万円** |
+Phase 1 は **サーバーレス最小構成**（Lambda 中心、単一アカウント、単一 AZ、NAT/CloudFront/WAF 不採用）で立ち上げ、Phase 2 開始時点で再設計する（詳細は `SlideForge_概要設計書.md` §3）。この結果、Phase 1 の月次運用コストが過剰スケール設計時の 1/10 程度に圧縮される。
 
-予備・バースト対応込みで **月 25〜30 万円**を予算化。
+### 4.2 Phase 1 明細（50 名 / 月 200 提案書、単一アカウント）
 
-### 4.2 Claude API コスト試算
+| サービス | 構成 | 計算根拠 | USD | 円 |
+|---|---|---|---:|---:|
+| Lambda（API） | 3,000 invoc × 512MB × 2s | GB-s 従量 | $1 | 150 |
+| Lambda Container（Render） | 200 × 3GB × 60s | LibreOffice 同梱 | $1 | 150 |
+| Fargate Spot（バースト予備） | 緊急時のみ | — | $3 | 450 |
+| API Gateway | 50k req × $1/M | — | $1 | 150 |
+| RDS db.t4g.small Single-AZ | $0.027/h × 720 + 20GB | メタデータ | $20 | 3,000 |
+| S3 | 3GB + リクエスト | — | $1 | 150 |
+| SQS | 200 msg | 無料枠内 | $0 | 0 |
+| Cognito | 50 MAU | 無料枠内 | $0 | 0 |
+| CloudWatch | Logs 5GB + Alarm 10 | — | $4 | 600 |
+| Secrets Manager | 3 秘匿 | $0.40 / secret | $2 | 300 |
+| KMS | 2 CMK | $1 / CMK | $2 | 300 |
+| CodePipeline V2 | 1 pipeline | — | $1 | 150 |
+| CodeBuild | 月 200 分 | $0.005/min | $2 | 300 |
+| Claude API | §4.3 参照 | Sonnet + Cache | $80 | 12,000 |
+| **Prod 小計** | | | **$118** | **17,700** |
+| Stg / Dev（idle $0 基調） | Lambda 従量 + 必要時 RDS ON | — | $15 | 2,300 |
+| **合計** | | | **$133** | **約 20,000 / 月** |
+
+**Phase 1 で不採用**（Phase 2 以降で復活）：NAT Gateway、CloudFront、ElastiCache、WAF、GuardDuty、Aurora Serverless v2、クロスリージョン DR、マルチアカウント。
+
+バースト・為替バッファ込みで **月 3 万円**を予算化。
+
+### 4.3 Claude API コスト試算
 
 想定（`01_prompt_engineering.md` §8 より、1 提案書あたり）:
 - input 17,500 tokens / output 6,500 tokens
 - Prompt Caching 70% ヒット想定 → 有効 input ≒ 5,250 + 12,250×0.1 = 6,475
 - Sonnet 4.6 想定単価：input $3 / output $15 / MTok（仮）
 - 1 提案書：($3 × 6,475 + $15 × 6,500) / 1M ≒ $0.117
-- 月 200 提案書：約 $23 → 約 3,500 円
-- 修正リトライ・Eval・内部ツール込みで実績バッファ 10 倍の **月 35,000 〜 55,000 円** を見積もり
+- 月 200 提案書：約 $23
+- 修正 3 回平均・Eval・Haiku 併用で実測倍率 3〜4 倍想定 → **月 $80（約 12,000 円）**
 
-### 4.3 Phase 2 / Phase 3 概算
+### 4.4 Phase 2 / Phase 3 概算
 
-| Phase | 月間生成 | 推定月額 |
-|---|---:|---:|
-| Phase 2（5 社 × 50 名） | 800 件 | 60 〜 100 万円 |
-| Phase 3（50 社 × 30 名） | 6,000 件 | 350 〜 500 万円 |
+Phase 2 開始時点でアーキテクチャを再設計（Aurora Serverless v2、ECS Fargate 常駐、WAF、CloudFront、マルチアカウント）するため、コストは非線形に増える。
 
-スケール効率（RDS / ECS は準線形、LLM はトークン従量）を踏まえ試算。
+| Phase | 月間生成 | 推定月額 | 主な増加要因 |
+|---|---:|---:|---|
+| Phase 1 | 200 件 | 2 万円 | Lambda サーバーレス最小 |
+| Phase 2（5 社 × 50 名） | 800 件 | 40〜55 万円 | Aurora v2、ECS 常駐、WAF、マルチアカウント |
+| Phase 3（50 社 × 30 名） | 6,000 件 | 180〜250 万円 | CloudFront、GuardDuty、DR、ElastiCache |
 
-### 4.4 Unit Economics
+### 4.5 Unit Economics
 
-| 指標 | Phase 1 | Phase 3 |
-|---|---:|---:|
-| 1 提案書あたり原価 | 1,250 円 | 750 円 |
-| 目標顧客単価（SaaS Standard） | — | 30,000 円 / 月 |
-| 粗利率目標 | — | 60% |
+| 指標 | Phase 1 | Phase 2 | Phase 3 |
+|---|---:|---:|---:|
+| 1 提案書あたり原価 | 約 100 円 | 約 600 円 | 約 380 円 |
+| 目標顧客単価（SaaS Standard） | — | — | 30,000 円 / 月 |
+| 粗利率目標 | — | — | 60% |
+
+Phase 1 は内部利用のため「単価」ではなく「削減価値 vs 運用費」の比較が本質（§7 ROI）。
 
 ---
 
@@ -156,9 +171,9 @@ SRE 用（技術 SLI）／事業用（KPI）を分離、経営レビュー月次
 
 ### 7.3 回収
 
-- 月次ランニング 30 万円 vs 削減 600 万円
+- 月次ランニング 2〜3 万円 vs 削減 600 万円
 - 開発費 Phase 0〜1 合計 1,182 万円
-- 回収期間 ≒ 2 ヶ月（稼働開始後）
+- 回収期間 ≒ 2 ヶ月（稼働開始後、ランニング分のみなら初週で回収）
 
 当然前提条件の精度は要検証。先行 10 件でタイムトラッキングを実施して更新する。
 
@@ -220,6 +235,21 @@ SRE 用（技術 SLI）／事業用（KPI）を分離、経営レビュー月次
 | Phase 1 → 2 | WAU ≥ 30 / 50、1 提案書所要時間 ≤ 3 時間、NPS ≥ 20、重大セキュリティ事故ゼロ |
 | Phase 2 → 3 | 顧客案件 2 件以上導入、SLO 達成、ペネトレーションテスト合格、損益分岐の見通し |
 | Phase 3 継続 | MRR 増加、解約率 ≤ 5% / 月、SOC 2 Readiness 合格 |
+
+### 10.3.1 Phase 2 開始時のアーキテクチャ再設計
+
+Phase 1 の最小構成は意図した技術的負債。Phase 2 キックオフで以下を実施する。
+
+| 項目 | 移行内容 |
+|---|---|
+| DB | RDS t4g.small Single-AZ → Aurora Serverless v2（Multi-AZ） |
+| API 実行基盤 | Lambda → ECS Fargate 常駐（コールドスタート・15 分制限回避） |
+| キャッシュ | なし → ElastiCache Redis |
+| CDN | なし → CloudFront |
+| WAF | なし → AWS WAF（OWASP Top10 マネージドルール） |
+| 環境分離 | Stack 分離（単一アカウント） → Dev/Stg/Prod の独立 AWS アカウント |
+| 監査・セキュリティ | 基本 → GuardDuty、Config、Security Hub |
+| 移行工数 | Phase 2 の 4 週間のうち 1.5 週相当を割り当て |
 
 ### 10.4 マイルストーン（目安）
 

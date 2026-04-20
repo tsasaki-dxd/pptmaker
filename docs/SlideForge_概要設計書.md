@@ -83,54 +83,86 @@
 
 ## 3. システムアーキテクチャ
 
-### 3.1 全体構成
+本システムはフェーズによって構成を変える方針。**Phase 1 はサーバーレス最小構成で立ち上げ、Phase 2 以降で段階的に拡張する**。
+
+### 3.1 Phase 1 全体構成（最小構成）
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Frontend (Web UI)                       │
-│   Next.js / React + TypeScript + Tailwind CSS                │
-│   - テンプレート登録画面  - 骨格入力画面  - プレビュー       │
-│   - 修正指示チャット    - アウトプット管理                    │
-└──────────────────────────┬──────────────────────────────────┘
-                           │ HTTPS / JSON
-┌──────────────────────────▼──────────────────────────────────┐
-│                      Backend API                             │
-│   FastAPI (Python) on ECS Fargate                            │
-│   - /templates  - /projects  - /slides  - /generate          │
-│   - /preview    - /revise    - /export                       │
-└──────────┬────────────────┬─────────────────┬───────────────┘
-           │                │                 │
-           ▼                ▼                 ▼
-┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-│  LLM Service    │ │  Render Engine  │ │   Storage       │
-│  Claude API     │ │  PPTX Builder   │ │  S3 + RDS       │
-│  - 骨格生成      │ │  (Python)       │ │  - テンプレート │
-│  - 修正解釈      │ │  - XML組立     │ │  - プロジェクト │
-│  - 文言ブラッシュ │ │  - レイアウト │ │  - 履歴         │
-└─────────────────┘ └─────────────────┘ └─────────────────┘
-                           │
-                           ▼
-                  ┌─────────────────┐
-                  │  Preview Gen    │
-                  │  LibreOffice    │
-                  │  + pdftoppm     │
-                  │  (画像生成)      │
-                  └─────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│                  Frontend (Web UI)                          │
+│   Next.js / React + TypeScript + Tailwind CSS               │
+│   CloudFront は省略、S3 静的ホスティング + Cognito 認証     │
+└─────────────────────────┬──────────────────────────────────┘
+                          │ HTTPS / JSON
+┌─────────────────────────▼──────────────────────────────────┐
+│  API Gateway  →  Lambda (Python / FastAPI on Mangum)        │
+│   - 軽量 API は同期 Lambda                                   │
+│   - 重い処理は SQS → Lambda Container で非同期              │
+└──────┬─────────────────┬──────────────────┬────────────────┘
+       │                 │                  │
+       ▼                 ▼                  ▼
+┌────────────┐  ┌────────────────────┐  ┌─────────────┐
+│ Claude API │  │ Render Lambda      │  │ RDS t4g.small│
+│ (HTTPS)    │  │ (Container, 10GB) │  │ Single-AZ   │
+│            │  │ LibreOffice 同梱   │  │ Postgres     │
+│            │  │ + python-pptx     │  │             │
+└────────────┘  └──────────┬─────────┘  └─────────────┘
+                            │
+                            ▼
+                  ┌──────────────────┐
+                  │       S3         │
+                  │ templates /      │
+                  │ projects /       │
+                  │ outputs /        │
+                  │ previews         │
+                  └──────────────────┘
+
+[Cognito] 認証、MFA 管理者のみ必須
+[CloudWatch] Logs / Alarms（最小）
+[Secrets Manager] Claude API Key
 ```
 
-### 3.2 技術スタック
+**設計方針**
 
-| 層 | 採用技術 | 理由 |
+- 単一 AWS アカウント、単一リージョン（ap-northeast-1）
+- API は Lambda（FastAPI + Mangum）：月数千リクエストで従量課金が最小
+- Render は Lambda Container 10GB に LibreOffice 同梱、重負荷時のみ Fargate Spot を暫定併用
+- RDS db.t4g.small Single-AZ：50 ユーザーの規模に十分
+- NAT Gateway / CloudFront / WAF / GuardDuty / CRR / ElastiCache は **Phase 1 では採用しない**
+- Dev/Stg は Stack 分離のみ（idle 時 $0 基調）
+
+Phase 1 簡略構成は**意図した技術的負債**であり、Phase 2 開始時点で再設計する（§3.3 参照）。
+
+### 3.2 技術スタック（Phase 1）
+
+| 層 | Phase 1 採用技術 | 理由 |
 |---|---|---|
-| フロントエンド | Next.js / React / TypeScript | 既存の当社技術スタック準拠、UI開発効率 |
-| バックエンドAPI | Python / FastAPI | PPTX操作ライブラリとの親和性、Claude SDKの充実 |
-| LLM | Claude API (Sonnet / Opus) | 高品質な日本語出力、長いコンテキストの安定性 |
-| PPTX生成 | python-pptx ＋ 独自XMLビルダー | 今回のPoC実績を踏襲、細かい制御が可能 |
-| プレビュー | LibreOffice (soffice) + pdftoppm | 今回のPoCで動作確認済み |
-| ストレージ | AWS S3（ファイル） / Aurora PostgreSQL（メタデータ） | 当社の他案件と統一 |
-| 認証 | Cognito（将来的にSSO連携） | AWS統一、社内展開容易 |
-| インフラ | ECS Fargate / ALB / CloudFront | コンテナベースで運用簡素化 |
-| CI/CD | GitHub Actions（CI） + AWS CodePipeline / CodeDeploy（CD） | CI は PR 連動・エコシステム重視、CD は承認待ち無料・AWS ネイティブ統制（詳細は `03_ops_and_testing.md` §8） |
+| フロントエンド | Next.js / React / TypeScript（S3 + Cognito 静的ホスティング） | 既存の当社技術スタック準拠 |
+| バックエンド API | Python / FastAPI on AWS Lambda（Mangum 経由） | 従量課金、idle 時 $0 |
+| 非同期処理 | SQS + Lambda Container（10GB 上限、LibreOffice 同梱） | Fargate 常駐の削減 |
+| LLM | Claude API（Sonnet 4.6 標準、Opus 4.7 1M / Haiku 4.5 併用） | 高品質日本語、最新モデル |
+| PPTX 生成 | python-pptx ＋ 独自 XML ビルダー | PoC 実績踏襲 |
+| プレビュー | LibreOffice (soffice) + pdftoppm（Lambda Container 内） | PoC 動作確認済 |
+| ストレージ | AWS S3（ファイル） / RDS db.t4g.small Single-AZ PostgreSQL（メタデータ） | Phase 1 では最小構成。Phase 2 で Aurora Serverless v2 に切替 |
+| 認証 | Cognito（将来的に SSO 連携） | AWS 統一、社内展開容易 |
+| インフラ | Lambda / API Gateway / SQS / S3（ECS / ALB / CloudFront は Phase 1 不採用） | 従量課金の恩恵を最大化 |
+| CI/CD | GitHub Actions（CI） + AWS CodePipeline / CodeDeploy（CD） | 詳細は `03_ops_and_testing.md` §8 |
+
+### 3.3 Phase 2 以降のアーキテクチャ拡張
+
+以下は Phase 2 開始時点で段階的に導入する：
+
+| 追加要素 | 導入タイミング | 理由 |
+|---|---|---|
+| Aurora Serverless v2 | Phase 2 | マルチ AZ、可用性要件 |
+| ECS Fargate（API / Worker 常駐） | Phase 2 後半 | Lambda 15 分制限・コールドスタート問題が顕在化したら |
+| ElastiCache Redis | Phase 2 | セッション / LLM 応答キャッシュ |
+| CloudFront | Phase 2 | 顧客配信、地理分散 |
+| WAF | Phase 2 | 外部攻撃面増加 |
+| マルチアカウント（Dev/Stg/Prod 分離） | Phase 2 | 本番環境保護、監査分離 |
+| GuardDuty | Phase 3 | SOC2 取得要件 |
+| クロスリージョン DR | Phase 3 | SaaS SLA |
+| Multi-Region Active-Active | Phase 4 以降 | 海外展開時 |
 
 ---
 
@@ -329,12 +361,13 @@ User ──┬─── Project ──┬── Blueprint ──── Slide
 
 | 項目 | 目標値 | 備考 |
 |---|---|---|
-| 骨格生成レイテンシ | ≤ 30秒 | Claude APIのレスポンス依存 |
-| .pptx生成レイテンシ | ≤ 10秒 | 18枚程度のスライドで |
-| プレビュー生成レイテンシ | ≤ 15秒 | LibreOffice依存、キャッシュ活用 |
-| 同時セッション数 | 最大50（初期） | ECS Fargateスケール |
-| 可用性 | 99.5% | 社内ツールのため緩め |
-| データ保持 | プロジェクト1年 / テンプレ無期限 | 法的要件次第で変更 |
+| 骨格生成レイテンシ | ≤ 30 秒 | Claude API のレスポンス依存 |
+| .pptx 生成レイテンシ | ≤ 20 秒（Phase 1） / ≤ 10 秒（Phase 2 以降） | Lambda コールドスタート許容 |
+| プレビュー生成レイテンシ | ≤ 20 秒（Phase 1） | キャッシュなし前提 |
+| 同時セッション数 | 最大 50（Phase 1） | Lambda 同時実行で吸収 |
+| 可用性 | 99.0%（Phase 1、単一 AZ） / 99.5%（Phase 2） | 社内ツールのため緩め |
+| RPO / RTO | RPO 24h / RTO 4h（Phase 1） | 自動スナップショット＋手動復旧 |
+| データ保持 | プロジェクト 1 年 / テンプレ無期限 | 法的要件次第で変更 |
 
 ### セキュリティ
 
