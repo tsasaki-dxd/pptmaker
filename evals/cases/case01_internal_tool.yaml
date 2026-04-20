@@ -1,0 +1,21 @@
+intent: 社内 DX 部門向けに、AI 活用した提案書自動生成ツール導入の提案書を作成したい
+required_sections:
+  - 課題認識
+  - 提案概要
+  - 体制
+  - 費用
+  - スケジュール
+aux_context: 第一フェーズは社内 50 名、月 200 提案書想定。内製。
+template_summary: |
+  総スライド数: 18
+  - slide1: cover
+  - slide2: toc
+  - slide3: section_divider
+  - slide4-17: content
+  - slide18: about
+figure_catalog: |
+  - table, cards_grid, two_column, timeline, stat_callout, bullet_list, comparison
+pass_floor:
+  n: 3
+  s: 3
+  f: 3

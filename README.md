@@ -1,42 +1,86 @@
-# PoC Bundle: AIスライド生成（DXデザインシステム提案書）
+# SlideForge
 
-このフォルダは、Claudeとの対話で開発した「テンプレート駆動型PPTX自動生成」のPoC資産一式です。`SlideForge`（仮称）として正式なシステム化を進める際の基礎資産として参照してください。
+テンプレート駆動型の AI スライド生成システム。Claude API で骨格を生成し、コーポレートテンプレート準拠の `.pptx` を自動レンダリングします。Phase 1 は社内利用向けにサーバーレス最小構成で実装しています（`docs/SlideForge_概要設計書.md` §3）。
 
-## フォルダ構成
+## リポジトリ構成
 
 ```
 .
-├── README.md                          # 本ファイル
-├── scripts/                           # PoCで実際に動作したスクリプト群
-│   ├── shape_lib.py                   # 図形・テキスト生成のコアライブラリ
-│   ├── normalize_template.py          # テンプレートのフォント・配色正規化
-│   ├── build_figures_part1.py         # slide1/2/3/10/11 の生成
-│   ├── build_figures_part2.py         # slide7/12/13 の生成
-│   ├── build_figures_part3.py         # slide8/14/15 の生成
-│   └── build_figures_part4.py         # slide9/16/17/18/4/5/6 の生成
-├── outputs/                           # 最終成果物
-│   ├── DXDesignSystem_Proposal.pptx   # 完成版PPTX（全18スライド）
-│   └── DXDesignSystem_Proposal.pdf    # PDF版（LibreOffice出力）
-└── docs/
-    ├── SlideForge_概要設計書.md       # 本PoCを正式システム化する際の設計書
-    ├── 01_prompt_engineering.md       # LLM/プロンプト・Eval・コスト設計
-    ├── 02_ui_ux_design.md             # 画面・遷移・ワイヤー
-    ├── 03_ops_and_testing.md          # SLO・テスト・CI/CD・IaC
-    ├── 04_template_and_plugin.md      # テンプレ解析・図表プラグインIF
-    ├── 05_security_compliance.md      # セキュリティ・監査・法令
-    ├── 06_business_plan.md            # コスト・KPI・ロードマップ
-    └── bootstrap.md                   # AWS 初回セットアップ Runbook
+├── README.md
+├── Makefile
+├── pyproject.toml
+├── app/
+│   ├── api/            # FastAPI + Mangum（Lambda 用 API）
+│   ├── render/         # Lambda Container（LibreOffice + python-pptx）
+│   └── web/            # Next.js (App Router, static export)
+├── infra/              # AWS CDK (Python) — Phase 1 単一アカウント構成
+│   ├── app.py
+│   ├── stacks/         # Pipeline / Data / App / Observability
+│   ├── stages/
+│   └── bootstrap/      # GHA OIDC 用 IAM ポリシー雛形
+├── prompts/            # LLM プロンプト（プロジェクト運用用・後述）
+├── evals/              # LLM-as-a-Judge による評価ハーネス
+├── tests/              # unit / integration
+├── scripts/            # PoC スクリプト（参考資産として保持）
+├── outputs/            # PoC 成果物（.pptx / .pdf）
+├── docs/
+│   ├── SlideForge_概要設計書.md
+│   ├── 01_prompt_engineering.md
+│   ├── 02_ui_ux_design.md
+│   ├── 03_ops_and_testing.md
+│   ├── 04_template_and_plugin.md
+│   ├── 05_security_compliance.md
+│   ├── 06_business_plan.md
+│   └── bootstrap.md        # AWS 初回セットアップ Runbook
+└── .github/workflows/  # CI（GHA）
 ```
 
-## 正式システム化ドキュメント
-
-PoC からの正式システム化（コードネーム **SlideForge**）に向けた設計一式は `docs/` 配下にあります。
+## ドキュメント
 
 - 概要設計：`docs/SlideForge_概要設計書.md`
 - 詳細設計：`docs/01_prompt_engineering.md` 〜 `docs/06_business_plan.md`
-- **AWS 環境を初めて立ち上げる方へ**：`docs/bootstrap.md`（CDK ブートストラップ、OIDC 設定、ECR、Pipeline Stack 初回デプロイまでの手順書）
+- **AWS 環境を初めて立ち上げる方へ**：`docs/bootstrap.md`
 
-## 事前準備
+## クイックスタート（ローカル）
+
+```bash
+# 1. すべての依存をインストール
+make install-api
+make install-render
+make install-infra
+make install-web
+
+# 2. テスト
+make test-unit
+
+# 3. API をローカル起動
+cd app/api && source .venv/bin/activate
+ENV=local uvicorn main:app --reload --port 8000
+# → http://localhost:8000/docs で Swagger UI
+
+# 4. Web をローカル起動
+cd app/web && npm run dev
+# → http://localhost:3000
+
+# 5. Render Lambda Container をビルド
+make build-render
+
+# 6. CDK synth
+make synth
+```
+
+## 初回デプロイ
+
+**`docs/bootstrap.md`** を上から順に実行してください。所要 1〜2 時間。
+最後の `make deploy-pipeline` 実行後、main への PR merge で自動的に Stg → Prod までデプロイされます。
+
+---
+
+# PoC 資産（参考）
+
+以下は `scripts/` と `outputs/` に残されている PoC 段階の資産のドキュメントです。正式版（`app/`, `infra/`）は上記を参照。
+
+## 事前準備（PoC スクリプト実行）
 
 ### 必要な環境
 - Python 3.10+

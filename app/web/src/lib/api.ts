@@ -1,0 +1,72 @@
+/** Minimal API client with Cognito access token. */
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? '';
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const token = typeof window !== 'undefined' ? window.localStorage.getItem('slideforge.accessToken') : null;
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...init.headers,
+    },
+  });
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+  return (await res.json()) as T;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  template_id: string;
+  status: string;
+  created_at: string;
+}
+
+export interface SlideSpec {
+  index: number;
+  layout: string;
+  figure_type?: string;
+  content: Record<string, unknown>;
+}
+
+export interface Blueprint {
+  id: string;
+  project_id: string;
+  version: number;
+  title: string;
+  slides: SlideSpec[];
+  created_at: string;
+}
+
+export const api = {
+  health: () => request<{ status: string }>('/health'),
+  createTemplate: (name: string) =>
+    request<{ template_id: string; upload_url: string }>(
+      `/api/templates?name=${encodeURIComponent(name)}`,
+      { method: 'POST' },
+    ),
+  createProject: (name: string, template_id: string) =>
+    request<Project>('/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ name, template_id }),
+    }),
+  createBlueprint: (project_id: string, intent: string, required_sections: string[]) =>
+    request<Blueprint>(`/api/projects/${project_id}/blueprint`, {
+      method: 'POST',
+      body: JSON.stringify({ intent, required_sections, mode: 'freeform' }),
+    }),
+  getBlueprint: (project_id: string) => request<Blueprint>(`/api/projects/${project_id}/blueprint`),
+  revise: (project_id: string, instruction: string) =>
+    request<{ id: string; patch: unknown[] }>(`/api/projects/${project_id}/revise`, {
+      method: 'POST',
+      body: JSON.stringify({ instruction }),
+    }),
+  render: (project_id: string) =>
+    request<{ job_id: string; status: string }>(`/api/projects/${project_id}/render`, { method: 'POST' }),
+  preview: (project_id: string, slide_index: number) =>
+    request<{ slide_index: number; url: string }>(`/api/projects/${project_id}/preview/${slide_index}`),
+  exportUrl: (project_id: string, format: 'pptx' | 'pdf') =>
+    request<{ format: string; url: string }>(`/api/projects/${project_id}/export?format=${format}`),
+};

@@ -1,0 +1,16 @@
+intent: 製造業顧客向けに、デザインシステム構築支援の提案書を作りたい
+required_sections:
+  - 背景
+  - 提案内容
+  - 成果物
+  - 費用
+  - 推進体制
+aux_context: 6ヶ月プロジェクト、顧客側担当者 3 名、当社コンサル 2 名。
+template_summary: |
+  総スライド数: 22
+figure_catalog: |
+  - table, cards_grid, two_column, timeline, stat_callout, bullet_list, comparison
+pass_floor:
+  n: 3
+  s: 3
+  f: 3
