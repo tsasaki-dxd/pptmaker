@@ -220,17 +220,74 @@ trigger: PR / push to main
 [visual-regression] ── reg-cli diff
 [llm-eval]          ── prompts/evals 実行（main 到達時）
   ↓
-[ecr-push]       ── OIDC で AssumeRole → ECR push（tag = commit SHA）
-  ↓
-[trigger-cd]     ── CodePipeline を ECR イメージタグで起動
+[ecr-push]       ── OIDC で AssumeRole → ECR push
+                     - 常時: tag = commit SHA
+                     - main 合流時のみ: tag = "prod" を追加 push
 ```
 
-**OIDC 設定**：GitHub → AWS IAM OIDC Provider を信頼、Role は `ecr:Put*` / `codepipeline:StartPipelineExecution` のみに最小化。
+GHA は ECR に image を届けるまでが責務。以降は CodePipeline が ECR イベントで自走（§8.4）。**GHA から明示的に Pipeline を起動しない**（タグ分岐で制御する方が疎結合）。
+
+### 8.3.1 OIDC Federation（静的キー不要）
+
+GitHub Secrets に AWS の静的アクセスキーを置かない。GHA ジョブ毎に OIDC JWT を発行 → AWS STS が短命キー（1 時間）を返す方式を採用。
+
+**GitHub 側に必要な設定**（Variables で十分、Secrets 不要）
+
+| キー | 種別 | 値の例 |
+|---|---|---|
+| `AWS_ROLE_ARN` | Variable | `arn:aws:iam::<acct>:role/gha-slideforge-ecr-push` |
+| `AWS_REGION` | Variable | `ap-northeast-1` |
+| `ECR_REPOSITORY` | Variable | `slideforge/api` |
+
+**AWS 側の 1 回セットアップ**
+
+1. IAM OIDC Provider を追加（`token.actions.githubusercontent.com`、audience `sts.amazonaws.com`）
+2. Role の Trust Policy で対象リポ・ブランチを限定（`sub` 条件で `repo:tsasaki-dxd/pptmaker:ref:refs/heads/main` 等）
+3. Role の Permission は **ECR push 権限のみ**（`ecr:GetAuthorizationToken`, `ecr:PutImage`, レイヤー系）
+
+**開発者の実感**
+
+- ワークフロー上では `aws-actions/configure-aws-credentials@v4` に Role ARN と Region を渡すだけ
+- 短命キーの取得・環境変数注入・失効はすべて action 内部で完結
+- `AKIA...` や `SessionToken` を一度も触らない、Git に混入しえない
+- 監査は CloudTrail の `AssumeRoleWithWebIdentity` イベントで追跡
+
+**トラブル時の確認ポイント**
+
+- AssumeRole 失敗 → Trust Policy の `sub` 条件（リポ名・ブランチ・環境の表記揺れ）
+- 権限不足 → Role に紐付く IAM Policy（ECR のアクション／リソース）
+- 長尺ジョブでキー期限切れ → ジョブ分割、1 時間以内に収める
+
+### 8.3.2 イメージタグ設計
+
+CodePipeline の起動は **ECR の image tag** で制御する。GHA 側がタグを書き分ける。
+
+| トリガー | GHA が push するタグ | CodePipeline 起動 |
+|---|---|---|
+| PR（feature ブランチ） | `sha-<commit>` のみ | 起動しない |
+| main 合流 | `sha-<commit>` + `prod` | 起動する（`prod` タグ検知） |
+| hotfix（将来） | `hotfix-<date>` | 専用 Pipeline 起動 |
+
+main 合流時だけ `prod` タグを追加 push する分岐を GHA で書く：
+
+```yaml
+- name: Push with SHA tag (always)
+  run: docker push $REG/$REPO:${{ github.sha }}
+
+- name: Promote to prod tag (main only)
+  if: github.ref == 'refs/heads/main'
+  run: |
+    docker tag $REG/$REPO:${{ github.sha }} $REG/$REPO:prod
+    docker push $REG/$REPO:prod
+```
 
 ### 8.4 CodePipeline 側（CD）
 
+Source は ECR ネイティブサポートを利用。CodePipeline 作成時に裏で EventBridge Rule が自動生成され、`prod` タグでの `PutImage` イベントを検知して Pipeline が自走する。**AWS は GitHub を監視しない**（GHA が image を ECR に届けた瞬間から AWS 側の話に切り替わる）。
+
 ```
-Source: ECR Image (tag filter)
+Source: ECR Image (repo=slideforge/api, tag=prod)
+        ※ 内部で EventBridge Rule → StartPipelineExecution
   ↓
 [deploy-dev]     ── CodeDeploy / ECS Blue/Green（Dev アカウント）
   ↓
