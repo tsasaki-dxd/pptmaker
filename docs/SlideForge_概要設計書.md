@@ -130,7 +130,7 @@
 | ストレージ | AWS S3（ファイル） / Aurora PostgreSQL（メタデータ） | 当社の他案件と統一 |
 | 認証 | Cognito（将来的にSSO連携） | AWS統一、社内展開容易 |
 | インフラ | ECS Fargate / ALB / CloudFront | コンテナベースで運用簡素化 |
-| CI/CD | AWS CodePipeline | 社内の他案件と統一 |
+| CI/CD | GitHub Actions（CI） + AWS CodePipeline / CodeDeploy（CD） | CI は PR 連動・エコシステム重視、CD は承認待ち無料・AWS ネイティブ統制（詳細は `03_ops_and_testing.md` §8） |
 
 ---
 
