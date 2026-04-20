@@ -18,8 +18,23 @@
 │   ├── DXDesignSystem_Proposal.pptx   # 完成版PPTX（全18スライド）
 │   └── DXDesignSystem_Proposal.pdf    # PDF版（LibreOffice出力）
 └── docs/
-    └── SlideForge_概要設計書.md       # 本PoCを正式システム化する際の設計書
+    ├── SlideForge_概要設計書.md       # 本PoCを正式システム化する際の設計書
+    ├── 01_prompt_engineering.md       # LLM/プロンプト・Eval・コスト設計
+    ├── 02_ui_ux_design.md             # 画面・遷移・ワイヤー
+    ├── 03_ops_and_testing.md          # SLO・テスト・CI/CD・IaC
+    ├── 04_template_and_plugin.md      # テンプレ解析・図表プラグインIF
+    ├── 05_security_compliance.md      # セキュリティ・監査・法令
+    ├── 06_business_plan.md            # コスト・KPI・ロードマップ
+    └── bootstrap.md                   # AWS 初回セットアップ Runbook
 ```
+
+## 正式システム化ドキュメント
+
+PoC からの正式システム化（コードネーム **SlideForge**）に向けた設計一式は `docs/` 配下にあります。
+
+- 概要設計：`docs/SlideForge_概要設計書.md`
+- 詳細設計：`docs/01_prompt_engineering.md` 〜 `docs/06_business_plan.md`
+- **AWS 環境を初めて立ち上げる方へ**：`docs/bootstrap.md`（CDK ブートストラップ、OIDC 設定、ECR、Pipeline Stack 初回デプロイまでの手順書）
 
 ## 事前準備
 

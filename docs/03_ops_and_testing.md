@@ -455,3 +455,100 @@ L3: CTO / 代表取締役（個人情報事故・重大障害）
 - Playbook: 定型作業（テナント追加、モデル切替、テンプレ緊急削除）手順
 - SRE ダッシュボード: Datadog に SLI/SLO、LLM コスト、Render 成功率を集約
 - オンコール: 週次ローテーション、ハンドオフ議事録を必須
+
+---
+
+## 15. Infrastructure as Code とブートストラップ
+
+### 15.1 ツール選定
+
+| ツール | 判定 | 理由 |
+|---|---|---|
+| **AWS CDK (Python)** | **採用** | 開発スタックが Python、`aws-cdk-lib/pipelines` の自己更新パイプラインが標準、CodeDeploy/ECS のヘルパー充実 |
+| Terraform | 採用しない | 社内標準が CDK になる想定、マルチクラウド要件は当面なし |
+| CloudFormation 直書き | 採用しない | CDK の下層、直接は扱わない |
+| Console 手動 | 採用しない | 再現性・監査性欠如 |
+
+### 15.2 ディレクトリ構成
+
+```
+pptmaker/
+├── app/                         # アプリ本体
+├── infra/                       # CDK アプリ
+│   ├── app.py                   # エントリポイント
+│   ├── cdk.json
+│   ├── requirements.txt
+│   ├── stacks/
+│   │   ├── pipeline_stack.py    # CodePipeline + CodeBuild + CodeDeploy
+│   │   ├── network_stack.py     # VPC, Subnet, VPC Endpoint
+│   │   ├── data_stack.py        # RDS Aurora, S3, KMS, Secrets Manager
+│   │   ├── app_stack.py         # ECS Fargate, ALB, WAF
+│   │   └── obs_stack.py         # CloudWatch Alarms, Dashboards
+│   ├── stages/
+│   │   └── app_stage.py         # Dev/Stg/Prod 共通の Stage 定義
+│   └── tests/
+└── .github/workflows/
+```
+
+### 15.3 対象リソース
+
+Pipeline 配下の CDK が管理するもの：
+
+- VPC, Subnet, NAT, VPC Endpoint, Security Group
+- ECS Cluster, Fargate Service, Task Definition
+- ALB, Target Group, WAF
+- RDS Aurora, ElastiCache
+- S3 バケット（templates / projects / previews / logs）
+- KMS CMK, Secrets Manager エントリ
+- Cognito User Pool, App Client
+- CloudWatch Log Group, Alarm, Dashboard
+- IAM Role（ECS Task / CodeDeploy / EventBridge）
+- CodePipeline, CodeBuild, CodeDeploy Application / Deployment Group
+
+手動管理にするもの（IaC 範囲外）：
+
+- AWS アカウント自体、Organization、SCP
+- Route53 の親ゾーン（子ゾーンは CDK）
+- Identity Center（旧 SSO）ユーザー / グループ
+
+### 15.4 自己更新パイプライン（CDK Pipelines）
+
+```
+PR merge → GHA が ECR push (prod タグ)
+  ↓
+CodePipeline が起動
+  ↓
+[SelfMutate] cdk synth → 自身の CloudFormation 差分適用
+  ↓
+[Dev] → [Approval] → [Stg] → [Approval] → [Prod]
+```
+
+パイプライン定義の変更も同じ PR フローで入る。パイプラインに新ステージを追加 → merge → 次回実行時に反映。**手動 `cdk deploy` は初回のみ**。
+
+### 15.5 マルチアカウント
+
+```
+infra-acct  : CodePipeline / ECR / 共有 KMS
+dev-acct    : Dev 環境の ECS / RDS / S3
+stg-acct    : Stg 環境
+prod-acct   : Prod 環境
+```
+
+CDK Pipelines の `cross_account_keys=True` と `env={'account':..., 'region':...}` 指定で、必要な Cross-account Role と KMS 共有を自動生成。
+
+### 15.6 初回ブートストラップ
+
+詳細手順は **`docs/bootstrap.md`** に Runbook として整備する。サマリ：
+
+1. AWS Organization / アカウント作成
+2. 管理者が各アカウントで `cdk bootstrap`
+3. IAM OIDC Provider + GHA 用 Role を手動 or 専用 CDK で作成
+4. GitHub リポジトリに Variables 登録
+5. 管理者が 1 回だけ `cdk deploy PipelineStack`
+6. 以降は PR フローだけで運用
+
+### 15.7 IaC の CI
+
+- `infra/` に変更が入った PR で `cdk synth` / `cdk diff` を GHA で実行
+- `cdk-nag` で AWS Solutions / HIPAA 規格の静的チェック
+- Plan 差分を PR コメントに貼る
