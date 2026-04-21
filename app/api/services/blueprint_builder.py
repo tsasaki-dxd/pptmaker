@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
 from pydantic import ValidationError
 
-from ..models.schemas import Blueprint, SlideSpec
+from ..models.schemas import SlideSpec
 from .llm import LLMClient, extract_json
 
 log = logging.getLogger("slideforge.blueprint")
@@ -44,7 +43,7 @@ def build_blueprint(
             _validate(parsed)
             log.info("blueprint generated attempt=%d usage=%s", attempt, result.usage)
             return parsed
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             log.warning("blueprint attempt=%d failed: %s", attempt, e)
             last_error = e
     raise BlueprintBuildError(f"exhausted retries: {last_error}")

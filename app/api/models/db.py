@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, create_engine
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
 from ..config import get_settings
@@ -42,7 +42,7 @@ class ProjectRow(Base):
     template_id: Mapped[str] = mapped_column(String(36), ForeignKey("template_profiles.id"))
     status: Mapped[str] = mapped_column(String(50), default="draft")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    blueprints: Mapped[list["BlueprintRow"]] = relationship(back_populates="project")
+    blueprints: Mapped[list[BlueprintRow]] = relationship(back_populates="project")
 
 
 class BlueprintRow(Base):
