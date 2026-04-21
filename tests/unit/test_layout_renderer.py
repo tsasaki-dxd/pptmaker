@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from render.layout_renderer import RenderRequest, render_content_slide
 
-
 BASE_SLIDE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
        xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">

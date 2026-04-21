@@ -21,7 +21,7 @@ class RevisionError(Exception):
 
 
 def apply_instruction(
-    llm: "LLMClient",
+    llm: LLMClient,
     current_blueprint: dict[str, Any],
     instruction: str,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:

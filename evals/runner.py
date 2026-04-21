@@ -23,8 +23,8 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
 
-from api.services.blueprint_builder import BlueprintBuildError, build_blueprint  # noqa: E402
-from api.services.llm import LLMClient, extract_json  # noqa: E402
+from api.services.blueprint_builder import BlueprintBuildError, build_blueprint
+from api.services.llm import LLMClient, extract_json
 
 log = logging.getLogger("slideforge.eval")
 logging.basicConfig(level=logging.INFO)

@@ -16,12 +16,12 @@ EMU_PER_INCH: Final[int] = 914400
 
 def inch(v: float) -> int:
     """Convert inches to integer EMU."""
-    return int(round(v * EMU_PER_INCH))
+    return round(v * EMU_PER_INCH)
 
 
 def _i(v: float) -> int:
     """Integer guard for EMU values (PowerPoint compatibility)."""
-    return int(round(v))
+    return round(v)
 
 
 @dataclass(frozen=True)

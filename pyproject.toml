@@ -10,10 +10,17 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RUF"]
-ignore = ["E501"]
+# B008: FastAPI's `Depends(...)` is idiomatic in argument defaults.
+# RUF001/RUF002: Japanese copy deliberately uses full-width `×`, `、` etc.
+ignore = ["E501", "B008", "RUF001", "RUF002"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["N802", "B"]
+
+[tool.ruff.lint.isort]
+# `app/` is on pythonpath (see pytest config); treat its packages as first-party
+# so that `api.*` / `render.*` group below third-party imports.
+known-first-party = ["api", "render", "evals"]
 
 [tool.mypy]
 python_version = "3.12"

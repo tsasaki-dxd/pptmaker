@@ -6,7 +6,7 @@ from api.services.template_registry import _classify_slide
 
 
 def test_first_slide_is_cover() -> None:
-    layout, conf, _ = _classify_slide(1, "<x/>", total=10)
+    layout, _, _ = _classify_slide(1, "<x/>", total=10)
     assert layout == "cover"
 
 
