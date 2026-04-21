@@ -133,12 +133,10 @@ class AppStack(cdk.Stack):
             removal_policy=cdk.RemovalPolicy.SNAPSHOT if stage_name == "prod" else cdk.RemovalPolicy.DESTROY,
         )
 
-        anthropic_secret = sm.Secret(
-            self,
-            "AnthropicApiKey",
-            secret_name=f"slideforge/{stage_name}/anthropic",
-            description="Anthropic Claude API key (set value manually)",
-            encryption_key=self.key,
+        # Shared Anthropic API key (populated during bootstrap, referenced by
+        # all stages in Phase 1). Split per-stage in Phase 2 if needed.
+        anthropic_secret = sm.Secret.from_secret_name_v2(
+            self, "AnthropicApiKey", "slideforge/anthropic"
         )
 
         # ---- Application plane ----
