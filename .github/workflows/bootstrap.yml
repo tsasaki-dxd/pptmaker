@@ -1,0 +1,185 @@
+name: Bootstrap
+
+# One-time AWS bootstrap for SlideForge.
+#
+# Prereqs (set manually before first run):
+#   Secrets (Settings → Secrets and variables → Actions → Secrets):
+#     BOOTSTRAP_AWS_ACCESS_KEY_ID      Admin-level IAM access key, for bootstrap only
+#     BOOTSTRAP_AWS_SECRET_ACCESS_KEY  Same, secret part
+#     BOOTSTRAP_AWS_REGION             e.g. ap-northeast-1
+#     ANTHROPIC_API_KEY                Populated into Secrets Manager as slideforge/anthropic
+#
+# After this workflow succeeds:
+#   1. Delete the bootstrap IAM user (or at least rotate/revoke the keys).
+#   2. Follow the Job Summary to populate the 4 GitHub Variables used by ci.yml.
+#   3. Push to main -> normal pipeline takes over.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type BOOTSTRAP to confirm. This creates production-grade AWS resources.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    if: ${{ inputs.confirm == 'BOOTSTRAP' }}
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.BOOTSTRAP_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.BOOTSTRAP_AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.BOOTSTRAP_AWS_REGION }}
+      AWS_DEFAULT_REGION: ${{ secrets.BOOTSTRAP_AWS_REGION }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate secrets
+        run: |
+          for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_REGION; do
+            if [ -z "${!v}" ]; then
+              echo "::error::$v is empty. Set BOOTSTRAP_$v in repo Secrets."
+              exit 1
+            fi
+          done
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r infra/requirements.txt
+          npm install -g aws-cdk
+
+      - name: Resolve AWS account
+        id: acct
+        run: |
+          ACCT=$(aws sts get-caller-identity --query Account --output text)
+          echo "aws_account_id=$ACCT" >> "$GITHUB_OUTPUT"
+          echo "Resolved account: $ACCT"
+
+      - name: Create OIDC provider (idempotent)
+        env:
+          ACCT: ${{ steps.acct.outputs.aws_account_id }}
+        run: |
+          ARN="arn:aws:iam::$ACCT:oidc-provider/token.actions.githubusercontent.com"
+          if aws iam get-open-id-connect-provider --open-id-connect-provider-arn "$ARN" >/dev/null 2>&1; then
+            echo "OIDC provider already exists"
+          else
+            aws iam create-open-id-connect-provider \
+              --url https://token.actions.githubusercontent.com \
+              --client-id-list sts.amazonaws.com \
+              --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
+            echo "OIDC provider created"
+          fi
+
+      - name: Create GHA ECR push role (idempotent)
+        env:
+          ACCT: ${{ steps.acct.outputs.aws_account_id }}
+        run: |
+          sed "s/AWS_ACCT/$ACCT/g" infra/bootstrap/gha-trust.json > /tmp/trust.json
+          sed "s/AWS_ACCT/$ACCT/g" infra/bootstrap/gha-permission.json > /tmp/perm.json
+
+          if aws iam get-role --role-name gha-slideforge-ecr-push >/dev/null 2>&1; then
+            aws iam update-assume-role-policy \
+              --role-name gha-slideforge-ecr-push \
+              --policy-document file:///tmp/trust.json
+          else
+            aws iam create-role \
+              --role-name gha-slideforge-ecr-push \
+              --assume-role-policy-document file:///tmp/trust.json \
+              --description "GitHub Actions OIDC role for ECR push"
+          fi
+          aws iam put-role-policy \
+            --role-name gha-slideforge-ecr-push \
+            --policy-name ecr-push \
+            --policy-document file:///tmp/perm.json
+
+      - name: Create ECR repository (idempotent)
+        run: |
+          if ! aws ecr describe-repositories --repository-names slideforge/render >/dev/null 2>&1; then
+            aws ecr create-repository \
+              --repository-name slideforge/render \
+              --image-scanning-configuration scanOnPush=true \
+              --encryption-configuration encryptionType=AES256
+          else
+            echo "ECR repository already exists"
+          fi
+
+      - name: Put shared Anthropic API key into Secrets Manager
+        if: ${{ env.ANTHROPIC_API_KEY != '' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if aws secretsmanager describe-secret --secret-id slideforge/anthropic >/dev/null 2>&1; then
+            aws secretsmanager put-secret-value \
+              --secret-id slideforge/anthropic \
+              --secret-string "$ANTHROPIC_API_KEY" >/dev/null
+            echo "Updated existing secret"
+          else
+            aws secretsmanager create-secret \
+              --name slideforge/anthropic \
+              --description "Anthropic Claude API key (shared across Phase 1 stages)" \
+              --secret-string "$ANTHROPIC_API_KEY" >/dev/null
+            echo "Created new secret"
+          fi
+
+      - name: CDK bootstrap
+        working-directory: infra
+        env:
+          ACCT: ${{ steps.acct.outputs.aws_account_id }}
+          CDK_DEFAULT_ACCOUNT: ${{ steps.acct.outputs.aws_account_id }}
+          CDK_DEFAULT_REGION: ${{ secrets.BOOTSTRAP_AWS_REGION }}
+        run: |
+          cdk bootstrap "aws://$ACCT/$AWS_REGION" \
+            --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
+
+      - name: CDK deploy Pipeline Stack
+        working-directory: infra
+        env:
+          CDK_DEFAULT_ACCOUNT: ${{ steps.acct.outputs.aws_account_id }}
+          CDK_DEFAULT_REGION: ${{ secrets.BOOTSTRAP_AWS_REGION }}
+        run: |
+          cdk deploy SlideForgePipelineStack --require-approval never
+
+      - name: Write job summary with next steps
+        if: always()
+        env:
+          ACCT: ${{ steps.acct.outputs.aws_account_id }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          # Bootstrap complete
+
+          ## Next steps (manual)
+
+          ### 1. Set GitHub Variables (Settings -> Secrets and variables -> Actions -> Variables)
+
+          | Name | Value |
+          |---|---|
+          | \`AWS_ROLE_ARN\` | \`arn:aws:iam::$ACCT:role/gha-slideforge-ecr-push\` |
+          | \`AWS_REGION\` | \`$AWS_REGION\` |
+          | \`ECR_REGISTRY\` | \`$ACCT.dkr.ecr.$AWS_REGION.amazonaws.com\` |
+          | \`ECR_REPOSITORY\` | \`slideforge/render\` |
+
+          ### 2. Revoke bootstrap IAM credentials
+
+          Delete the IAM user whose keys were pasted into
+          \`BOOTSTRAP_AWS_ACCESS_KEY_ID\` / \`BOOTSTRAP_AWS_SECRET_ACCESS_KEY\`,
+          or at minimum rotate those keys. From now on, GHA uses OIDC via
+          the \`gha-slideforge-ecr-push\` role — no static keys needed.
+
+          ### 3. Trigger the normal pipeline
+
+          Push any commit to \`main\`. GHA will build the Render Container image,
+          push to ECR with tag \`prod\`, and CodePipeline will take over
+          (Stg -> Approval -> Prod).
+          EOF

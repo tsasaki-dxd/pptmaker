@@ -30,7 +30,7 @@ def _jwks() -> dict[str, Any]:
         f"https://cognito-idp.{s.aws_region}.amazonaws.com/"
         f"{s.cognito_user_pool_id}/.well-known/jwks.json"
     )
-    with urllib.request.urlopen(url, timeout=5) as resp:  # noqa: S310
+    with urllib.request.urlopen(url, timeout=5) as resp:
         return json.loads(resp.read())
 
 
