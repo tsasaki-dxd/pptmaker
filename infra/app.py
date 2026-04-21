@@ -2,8 +2,8 @@
 """
 SlideForge CDK entrypoint.
 
-Phase 1: single AWS account, stack prefix separates Dev / Stg / Prod.
-Phase 2 (planned): multi-account via `env={...}` + CrossAccount keys.
+Phase 1: single AWS account, single stage (Prod only). main merge == prod deploy.
+Phase 2 (planned): reintroduce Stg (and Dev) as separate AWS accounts.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ env = cdk.Environment(
     region=os.environ.get("CDK_DEFAULT_REGION", "ap-northeast-1"),
 )
 
-# Pipeline (deploys the two app stages below via self-mutation)
+# Pipeline (deploys the Prod stage below via self-mutation)
 PipelineStack(
     app,
     "SlideForgePipelineStack",
@@ -32,9 +32,7 @@ PipelineStack(
     ecr_repo_name=os.environ.get("ECR_REPOSITORY", "slideforge/render"),
 )
 
-# Direct-deployable stages (useful for local cdk deploy without pipeline)
-AppStage(app, "SlideForge-Dev", env=env, stage_name="dev")
-AppStage(app, "SlideForge-Stg", env=env, stage_name="stg")
+# Direct-deployable stage (useful for local cdk deploy without pipeline)
 AppStage(app, "SlideForge-Prod", env=env, stage_name="prod")
 
 app.synth()

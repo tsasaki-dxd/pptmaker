@@ -72,7 +72,7 @@ make synth
 ## 初回デプロイ
 
 **`docs/bootstrap.md`** を上から順に実行してください。所要 1〜2 時間。
-最後の `make deploy-pipeline` 実行後、main への PR merge で自動的に Stg → Prod までデプロイされます。
+最後の `make deploy-pipeline` 実行後、main への PR merge で自動的に Prod へデプロイされます（Phase 1 は単一ステージ、Stg は Phase 2 で新設）。
 
 ---
 

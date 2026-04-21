@@ -129,7 +129,7 @@
 - Render は Lambda Container 10GB に LibreOffice 同梱、重負荷時のみ Fargate Spot を暫定併用
 - RDS db.t4g.small Single-AZ：50 ユーザーの規模に十分
 - NAT Gateway / CloudFront / WAF / GuardDuty / CRR / ElastiCache は **Phase 1 では採用しない**
-- Dev/Stg は Stack 分離のみ（idle 時 $0 基調）
+- 環境は **Prod 単一**（main マージ＝本番デプロイ）。Stg / Dev は Phase 2 で新設
 
 Phase 1 簡略構成は**意図した技術的負債**であり、Phase 2 開始時点で再設計する（§3.3 参照）。
 
@@ -159,6 +159,7 @@ Phase 1 簡略構成は**意図した技術的負債**であり、Phase 2 開始
 | ElastiCache Redis | Phase 2 | セッション / LLM 応答キャッシュ |
 | CloudFront | Phase 2 | 顧客配信、地理分散 |
 | WAF | Phase 2 | 外部攻撃面増加 |
+| Stg 環境（独立 AWS アカウント） | Phase 2 | 本番前検証ステージを復活、CodePipeline のクロスアカウント構成に変更 |
 | マルチアカウント（Dev/Stg/Prod 分離） | Phase 2 | 本番環境保護、監査分離 |
 | GuardDuty | Phase 3 | SOC2 取得要件 |
 | クロスリージョン DR | Phase 3 | SaaS SLA |
