@@ -273,5 +273,5 @@ class AppStack(cdk.Stack):
         cdk.CfnOutput(self, "ApiEndpoint", value=self.http_api.api_endpoint)
         cdk.CfnOutput(self, "UserPoolId", value=self.user_pool.user_pool_id)
         cdk.CfnOutput(self, "UserPoolClientId", value=self.user_pool_client.user_pool_client_id)
-        cdk.CfnOutput(self, "ArtifactsBucket", value=self.artifacts_bucket.bucket_name)
+        cdk.CfnOutput(self, "ArtifactsBucketName", value=self.artifacts_bucket.bucket_name)
         cdk.CfnOutput(self, "RenderQueueUrl", value=self.render_queue.queue_url)
