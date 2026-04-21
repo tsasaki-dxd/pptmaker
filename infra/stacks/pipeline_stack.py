@@ -2,7 +2,8 @@
 CodePipeline Stack.
 
 Source: ECR image with tag `prod` pushed by GitHub Actions. The pipeline
-self-mutates and deploys to Stg and Prod stacks in this account.
+self-mutates and deploys to the single Prod stack in this account.
+Phase 1 runs a single stage only (main merge == production deploy).
 """
 
 from __future__ import annotations
@@ -10,9 +11,7 @@ from __future__ import annotations
 import os
 
 import aws_cdk as cdk
-from aws_cdk import aws_codepipeline_actions as cpa
 from aws_cdk import aws_ecr as ecr
-from aws_cdk import aws_iam as iam
 from aws_cdk import pipelines
 from constructs import Construct
 
@@ -68,21 +67,7 @@ class PipelineStack(cdk.Stack):
         )
 
         pipeline.add_stage(
-            AppStage(self, "Stg", env=cdk.Environment(account=self.account, region=self.region), stage_name="stg"),
-            post=[
-                pipelines.ShellStep(
-                    "SmokeTest",
-                    commands=[
-                        "echo 'smoke test placeholder'",
-                        "# curl -fsS $API_ENDPOINT/health",
-                    ],
-                )
-            ],
-        )
-
-        pipeline.add_stage(
             AppStage(self, "Prod", env=cdk.Environment(account=self.account, region=self.region), stage_name="prod"),
-            pre=[pipelines.ManualApprovalStep("PromoteToProd")],
         )
 
         # Ensure an ECR repo exists for the Render container pushes from GHA

@@ -181,5 +181,5 @@ jobs:
 
           Push any commit to \`main\`. GHA will build the Render Container image,
           push to ECR with tag \`prod\`, and CodePipeline will take over
-          (Stg -> Approval -> Prod).
+          (single stage: Prod only, Lambda alias Canary 10% -> 100%).
           EOF

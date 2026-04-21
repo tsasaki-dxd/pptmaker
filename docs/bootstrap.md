@@ -141,7 +141,7 @@ main ブランチに変更を push：
 - GHA の `ci` ワークフローが走る
 - main なので `render-image` ジョブが OIDC で AWS に認証 → ECR に image を push（tag `prod` も付与）
 - ECR の push イベントで CodePipeline が自動起動
-- Stg デプロイ → Smoke → Approval → Prod デプロイ
+- Prod デプロイ（Lambda alias Canary 10% → 100%）が走る。Phase 1 は Stg / 手動承認なし
 
 ---
 
