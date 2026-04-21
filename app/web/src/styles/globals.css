@@ -1,0 +1,6 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html { font-family: 'Noto Sans JP', system-ui, sans-serif; }
+body { color: #3A3A42; background: #FAFAFB; }

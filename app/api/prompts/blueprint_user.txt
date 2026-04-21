@@ -1,0 +1,12 @@
+以下のユーザー意図から提案書の骨格を組み立ててください。
+
+【意図】
+{USER_INTENT}
+
+【必須セクション】
+{REQUIRED_SECTIONS}
+
+【補助情報】
+{AUX_CONTEXT}
+
+出力は JSON のみ。
