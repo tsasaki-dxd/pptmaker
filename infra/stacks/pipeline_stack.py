@@ -70,14 +70,11 @@ class PipelineStack(cdk.Stack):
             AppStage(self, "Prod", env=cdk.Environment(account=self.account, region=self.region), stage_name="prod"),
         )
 
-        # Ensure an ECR repo exists for the Render container pushes from GHA
-        ecr.Repository(
-            self,
-            "RenderEcrRepo",
-            repository_name=ecr_repo_name,
-            image_scan_on_push=True,
-            removal_policy=cdk.RemovalPolicy.RETAIN,
-        )
+        # The ECR repo is created by bootstrap.yml (outside CDK) because GHA
+        # needs to push images to it before this stack exists. Reference the
+        # existing repo rather than re-declaring it to avoid the
+        # "resource already exists" change-set validation error.
+        ecr.Repository.from_repository_name(self, "RenderEcrRepo", ecr_repo_name)
 
         cdk.CfnOutput(
             self,
