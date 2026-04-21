@@ -1,28 +1,38 @@
-# Lambda Container Image for SlideForge Render (with LibreOffice + Poppler)
-FROM public.ecr.aws/lambda/python:3.12
+# Lambda Container Image for SlideForge Render (LibreOffice + Poppler + Noto Sans JP)
+#
+# Uses a Debian slim base + AWS Lambda Runtime Interface Client (awslambdaric)
+# instead of the AL2023-based public.ecr.aws/lambda/python image, because
+# AL2023's default repositories no longer ship LibreOffice.
+FROM python:3.12-slim-bookworm
 
-# LibreOffice + Poppler + Noto Sans JP
-RUN dnf install -y \
+# LibreOffice + Poppler + Japanese fonts
+RUN apt-get update && apt-get install -y --no-install-recommends \
       libreoffice-impress \
-      libreoffice-core \
-      libreoffice-headless \
       poppler-utils \
-      google-noto-sans-cjk-jp-fonts \
-      google-noto-sans-fonts \
-      && dnf clean all
+      fonts-noto-cjk \
+      fontconfig \
+      ca-certificates \
+      curl \
+    && rm -rf /var/lib/apt/lists/*
 
-# Warm-up LibreOffice profile to reduce cold-start
+# Warm up LibreOffice profile to reduce cold-start
 RUN soffice --headless --convert-to pdf /dev/null 2>/dev/null || true
 
-WORKDIR ${LAMBDA_TASK_ROOT}
+# AWS Lambda Runtime Interface Client — required on non-Amazon-Linux bases
+RUN pip install --no-cache-dir awslambdaric
+
+# Place app under Lambda's standard task root
+WORKDIR /var/task
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . ./
 
-ENV PYTHONPATH=${LAMBDA_TASK_ROOT}
+ENV PYTHONPATH=/var/task
 ENV LOG_LEVEL=INFO
 
-# Entry point: app/render/handler.py :: handler
+# Standard Lambda container entrypoint for custom base images:
+# awslambdaric consumes the handler spec passed as CMD.
+ENTRYPOINT ["/usr/local/bin/python", "-m", "awslambdaric"]
 CMD ["handler.handler"]
