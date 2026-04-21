@@ -69,7 +69,7 @@ class AppStack(cdk.Stack):
         self.vpc = ec2.Vpc(
             self,
             "Vpc",
-            max_azs=2,
+            availability_zones=["ap-northeast-1a", "ap-northeast-1c"],
             nat_gateways=0,
             subnet_configuration=[
                 ec2.SubnetConfiguration(name="public", subnet_type=ec2.SubnetType.PUBLIC, cidr_mask=24),
