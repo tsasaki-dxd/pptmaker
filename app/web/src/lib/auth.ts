@@ -7,18 +7,22 @@ import {
   CognitoUserSession,
 } from 'amazon-cognito-identity-js';
 
-const poolId = process.env.NEXT_PUBLIC_COGNITO_USER_POOL_ID ?? '';
-const clientId = process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID ?? '';
+import { getConfig } from './config';
 
 let cachedPool: CognitoUserPool | null = null;
-function pool(): CognitoUserPool {
-  if (!cachedPool) cachedPool = new CognitoUserPool({ UserPoolId: poolId, ClientId: clientId });
+
+async function pool(): Promise<CognitoUserPool> {
+  if (!cachedPool) {
+    const { userPoolId, userPoolClientId } = await getConfig();
+    cachedPool = new CognitoUserPool({ UserPoolId: userPoolId, ClientId: userPoolClientId });
+  }
   return cachedPool;
 }
 
 export async function signIn(email: string, password: string): Promise<string> {
+  const p = await pool();
   return new Promise((resolve, reject) => {
-    const user = new CognitoUser({ Username: email, Pool: pool() });
+    const user = new CognitoUser({ Username: email, Pool: p });
     const details = new AuthenticationDetails({ Username: email, Password: password });
     user.authenticateUser(details, {
       onSuccess: (session: CognitoUserSession) => {
@@ -31,8 +35,8 @@ export async function signIn(email: string, password: string): Promise<string> {
   });
 }
 
-export function signOut(): void {
-  const current = pool().getCurrentUser();
+export async function signOut(): Promise<void> {
+  const current = (await pool()).getCurrentUser();
   current?.signOut();
   window.localStorage.removeItem('slideforge.accessToken');
 }

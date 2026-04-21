@@ -109,3 +109,94 @@ jobs:
           docker push "$REG/$REPO:${{ github.sha }}"
           docker tag "$REG/$REPO:${{ github.sha }}" "$REG/$REPO:prod"
           docker push "$REG/$REPO:prod"
+
+  web-deploy:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [render-image]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Wait for CodePipeline Prod stage to succeed
+        run: |
+          echo "Polling SlideForgePipeline for Prod stage completion (timeout 30 min)..."
+          for i in $(seq 1 60); do
+            STATUS=$(aws codepipeline get-pipeline-state \
+              --name SlideForgePipeline \
+              --query "stageStates[?stageName=='Prod'].latestExecution.status" \
+              --output text 2>/dev/null || echo "Unknown")
+            echo "[$i/60] Prod stage: $STATUS"
+            case "$STATUS" in
+              Succeeded) echo "Pipeline deploy complete"; exit 0 ;;
+              Failed|Cancelled|Stopped) echo "::error::Pipeline failed: $STATUS"; exit 1 ;;
+            esac
+            sleep 30
+          done
+          echo "::error::Timeout waiting for pipeline"
+          exit 1
+
+      - name: Read App-prod CFN outputs
+        id: outputs
+        run: |
+          STACK="SlideForgePipelineStack-Prod-App-prod"
+          OUT=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs" --output json)
+          get() { echo "$OUT" | jq -r --arg k "$1" '.[] | select(.OutputKey==$k) | .OutputValue'; }
+          {
+            echo "api_endpoint=$(get ApiEndpoint)"
+            echo "user_pool_id=$(get UserPoolId)"
+            echo "user_pool_client_id=$(get UserPoolClientId)"
+            echo "web_bucket=$(get WebBucketName)"
+            echo "website_url=$(get WebsiteUrl)"
+          } | tee -a "$GITHUB_OUTPUT"
+
+      - name: Install and build Next.js
+        working-directory: app/web
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+          npm run build
+
+      - name: Write runtime config.json
+        run: |
+          cat > app/web/out/config.json <<EOF
+          {
+            "apiEndpoint": "${{ steps.outputs.outputs.api_endpoint }}",
+            "userPoolId": "${{ steps.outputs.outputs.user_pool_id }}",
+            "userPoolClientId": "${{ steps.outputs.outputs.user_pool_client_id }}",
+            "region": "${{ vars.AWS_REGION }}"
+          }
+          EOF
+          cat app/web/out/config.json
+
+      - name: Sync to S3 web bucket
+        run: |
+          aws s3 sync app/web/out/ "s3://${{ steps.outputs.outputs.web_bucket }}/" \
+            --delete \
+            --cache-control "public, max-age=300"
+          # config.json should never be cached — runtime settings
+          aws s3 cp app/web/out/config.json "s3://${{ steps.outputs.outputs.web_bucket }}/config.json" \
+            --cache-control "no-store"
+
+      - name: Summary
+        run: |
+          {
+            echo "# Deployment complete"
+            echo ""
+            echo "| Component | Value |"
+            echo "|-----------|-------|"
+            echo "| Website URL | ${{ steps.outputs.outputs.website_url }} |"
+            echo "| API Endpoint | ${{ steps.outputs.outputs.api_endpoint }} |"
+            echo "| User Pool ID | \`${{ steps.outputs.outputs.user_pool_id }}\` |"
+            echo ""
+            echo "### Next step"
+            echo "Run **Create User** workflow (Actions tab) to create login accounts."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -66,6 +66,26 @@ class AppStack(cdk.Stack):
             auto_delete_objects=stage_name != "prod",
         )
 
+        # Static website hosting for the Next.js SPA. Public-read, no
+        # CloudFront in Phase 1 (documented trade-off — HTTP only for
+        # internal use; Phase 2 adds CloudFront + HTTPS).
+        self.web_bucket = s3.Bucket(
+            self,
+            "WebBucket",
+            bucket_name=f"slideforge-{stage_name}-web-{self.account}",
+            website_index_document="index.html",
+            website_error_document="index.html",
+            public_read_access=True,
+            block_public_access=s3.BlockPublicAccess(
+                block_public_acls=False,
+                block_public_policy=False,
+                ignore_public_acls=False,
+                restrict_public_buckets=False,
+            ),
+            removal_policy=cdk.RemovalPolicy.RETAIN if stage_name == "prod" else cdk.RemovalPolicy.DESTROY,
+            auto_delete_objects=stage_name != "prod",
+        )
+
         self.vpc = ec2.Vpc(
             self,
             "Vpc",
@@ -275,3 +295,9 @@ class AppStack(cdk.Stack):
         cdk.CfnOutput(self, "UserPoolClientId", value=self.user_pool_client.user_pool_client_id)
         cdk.CfnOutput(self, "ArtifactsBucketName", value=self.artifacts_bucket.bucket_name)
         cdk.CfnOutput(self, "RenderQueueUrl", value=self.render_queue.queue_url)
+        cdk.CfnOutput(self, "WebBucketName", value=self.web_bucket.bucket_name)
+        cdk.CfnOutput(
+            self,
+            "WebsiteUrl",
+            value=f"http://{self.web_bucket.bucket_website_domain_name}",
+        )

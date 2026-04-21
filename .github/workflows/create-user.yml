@@ -1,0 +1,95 @@
+name: Create User
+
+# Create a Cognito user in the Prod user pool. Use this to onboard
+# internal users during Phase 1 (Cognito self sign-up is disabled).
+#
+# Requirements:
+# - Bootstrap has been run (OIDC role exists with cognito-idp permissions).
+# - App-prod stack has been deployed (User Pool exists).
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: 'Email address (also the login username)'
+        required: true
+        type: string
+      password:
+        description: 'Initial password (must meet Cognito policy: min 12, mixed case, digit, symbol)'
+        required: true
+        type: string
+      name:
+        description: 'Display name (optional)'
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  create-user:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Read UserPool ID from CFN outputs
+        id: outputs
+        run: |
+          STACK="SlideForgePipelineStack-Prod-App-prod"
+          POOL_ID=$(aws cloudformation describe-stacks \
+            --stack-name "$STACK" \
+            --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" \
+            --output text)
+          if [ -z "$POOL_ID" ] || [ "$POOL_ID" = "None" ]; then
+            echo "::error::Could not read UserPoolId from $STACK — has Prod been deployed yet?"
+            exit 1
+          fi
+          echo "user_pool_id=$POOL_ID" >> "$GITHUB_OUTPUT"
+          echo "Using User Pool: $POOL_ID"
+
+      - name: Create user (suppress invite email)
+        env:
+          POOL_ID: ${{ steps.outputs.outputs.user_pool_id }}
+          EMAIL: ${{ inputs.email }}
+          NAME: ${{ inputs.name }}
+        run: |
+          # Build attributes
+          ATTRS="Name=email,Value=$EMAIL Name=email_verified,Value=true"
+          if [ -n "$NAME" ]; then
+            ATTRS="$ATTRS Name=name,Value=$NAME"
+          fi
+          aws cognito-idp admin-create-user \
+            --user-pool-id "$POOL_ID" \
+            --username "$EMAIL" \
+            --user-attributes $ATTRS \
+            --message-action SUPPRESS
+
+      - name: Set permanent password
+        env:
+          POOL_ID: ${{ steps.outputs.outputs.user_pool_id }}
+          EMAIL: ${{ inputs.email }}
+          PASSWORD: ${{ inputs.password }}
+        run: |
+          aws cognito-idp admin-set-user-password \
+            --user-pool-id "$POOL_ID" \
+            --username "$EMAIL" \
+            --password "$PASSWORD" \
+            --permanent
+
+      - name: Summary
+        env:
+          EMAIL: ${{ inputs.email }}
+        run: |
+          {
+            echo "# User created"
+            echo ""
+            echo "- **Email / Username**: \`$EMAIL\`"
+            echo "- **Status**: CONFIRMED (permanent password set)"
+            echo ""
+            echo "The user can now sign in at the Website URL printed in the last main-branch CI run."
+          } >> "$GITHUB_STEP_SUMMARY"
