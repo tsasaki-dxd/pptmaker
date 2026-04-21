@@ -1,10 +1,11 @@
 /** Minimal API client with Cognito access token. */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? '';
+import { getConfig } from './config';
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const { apiEndpoint } = await getConfig();
   const token = typeof window !== 'undefined' ? window.localStorage.getItem('slideforge.accessToken') : null;
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${apiEndpoint}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
