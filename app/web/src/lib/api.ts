@@ -5,16 +5,27 @@ import { getConfig } from './config';
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const { apiEndpoint } = await getConfig();
   const token = typeof window !== 'undefined' ? window.localStorage.getItem('slideforge.accessToken') : null;
+  const isBodyJson = init.body && typeof init.body === 'string';
   const res = await fetch(`${apiEndpoint}${path}`, {
     ...init,
     headers: {
-      'Content-Type': 'application/json',
+      ...(isBodyJson ? { 'Content-Type': 'application/json' } : {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...init.headers,
     },
   });
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return (await res.json()) as T;
+}
+
+export interface TemplateProfile {
+  id: string;
+  tenant_id: string;
+  name: string;
+  original_s3_path: string;
+  design_tokens: Record<string, unknown>;
+  layouts: unknown[];
+  created_at: string;
 }
 
 export interface Project {
@@ -43,11 +54,26 @@ export interface Blueprint {
 
 export const api = {
   health: () => request<{ status: string }>('/health'),
+  listTemplates: () => request<TemplateProfile[]>('/api/templates'),
+  getTemplate: (id: string) => request<TemplateProfile>(`/api/templates/${id}`),
   createTemplate: (name: string) =>
     request<{ template_id: string; upload_url: string }>(
       `/api/templates?name=${encodeURIComponent(name)}`,
       { method: 'POST' },
     ),
+  /** Upload a .pptx file to a presigned S3 URL returned by createTemplate. */
+  uploadTemplateFile: async (uploadUrl: string, file: File): Promise<void> => {
+    const res = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type':
+          'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      },
+      body: file,
+    });
+    if (!res.ok) throw new Error(`upload failed: ${res.status} ${await res.text()}`);
+  },
+  listProjects: () => request<Project[]>('/api/projects'),
   createProject: (name: string, template_id: string) =>
     request<Project>('/api/projects', {
       method: 'POST',

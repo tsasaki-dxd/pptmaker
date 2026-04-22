@@ -30,6 +30,31 @@ log = logging.getLogger("slideforge.projects")
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
+
+@router.get("", response_model=list[Project])
+def list_projects(
+    tenant_id: str = Depends(require_tenant),
+    db: Session = Depends(get_session),
+) -> list[Project]:
+    rows = (
+        db.query(ProjectRow)
+        .filter(ProjectRow.tenant_id == tenant_id)
+        .order_by(ProjectRow.created_at.desc())
+        .all()
+    )
+    return [
+        Project(
+            id=r.id,
+            tenant_id=r.tenant_id,
+            name=r.name,
+            template_id=r.template_id,
+            status=r.status,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
 # Figure-type catalog sent to the blueprint LLM. Kept terse.
 FIGURE_CATALOG = (
     "- table: 行×列の表、ヘッダ+交互背景。content: {title?, headers, rows}\n"

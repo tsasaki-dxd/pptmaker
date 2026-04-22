@@ -1,0 +1,224 @@
+"""
+End-to-end integration test for the whole backend API flow.
+
+Uses:
+  - SQLite in-memory for the DB
+  - lightweight in-place fakes for boto3 S3/SQS clients
+  - a stub LLMClient so no real Anthropic call is made
+  - ENV=local to short-circuit Cognito JWT verification
+
+Covers: create template -> create project -> create blueprint ->
+revise blueprint -> request render -> fetch preview/export URLs.
+"""
+
+from __future__ import annotations
+
+import os
+import tempfile
+from unittest.mock import patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+# Use a file-backed sqlite so connections made by different requests share
+# the same schema. `:memory:` creates a fresh DB per connection, which means
+# init_db's CREATE TABLE doesn't survive to the next request.
+_DB_FILE_PATH = tempfile.mkstemp(suffix=".db")[1]
+os.environ["ENV"] = "local"
+os.environ["DB_URL"] = f"sqlite:///{_DB_FILE_PATH}"
+os.environ["S3_BUCKET"] = "test-bucket"
+os.environ["AWS_REGION"] = "us-east-1"
+os.environ["RENDER_QUEUE_URL"] = "https://sqs.us-east-1.amazonaws.com/111111111111/render-test"
+os.environ["ANTHROPIC_API_KEY"] = "test"  # prevents Secrets Manager lookup
+
+
+FAKE_BLUEPRINT_JSON = """
+{
+  "title": "DX推進ご提案書",
+  "slides": [
+    {"index": 1, "layout": "cover", "content": {"title": "DX推進ご提案"}},
+    {"index": 2, "layout": "toc", "content": {"items": ["現状", "提案", "費用"]}},
+    {
+      "index": 3,
+      "layout": "content",
+      "figure_type": "bullet_list",
+      "content": {"title": "課題", "items": ["データ分散", "属人化", "レガシーシステム"]}
+    }
+  ]
+}
+"""
+
+FAKE_PATCH_JSON = """
+[{"op": "replace", "path": "/title", "value": "DX推進ご提案書（更新版）"}]
+"""
+
+
+class _FakeLLMResult:
+    def __init__(self, text: str):
+        self.text = text
+        self.usage = {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        }
+        self.model = "claude-sonnet-4-6"
+
+
+def _fake_blueprint(*args, **kwargs):  # type: ignore[no-untyped-def]
+    return _FakeLLMResult(FAKE_BLUEPRINT_JSON)
+
+
+def _fake_revision(*args, **kwargs):  # type: ignore[no-untyped-def]
+    return _FakeLLMResult(FAKE_PATCH_JSON)
+
+
+class _FakeS3:
+    def generate_presigned_url(self, op: str, Params: dict, ExpiresIn: int) -> str:  # noqa: N803
+        bucket = Params["Bucket"]
+        key = Params["Key"]
+        return f"https://{bucket}.s3.amazonaws.com/{key}?sig=fake&op={op}"
+
+
+class _FakeSqs:
+    def __init__(self) -> None:
+        self.messages: list[dict] = []
+
+    def send_message(self, QueueUrl: str, MessageBody: str) -> dict:  # noqa: N803
+        self.messages.append({"QueueUrl": QueueUrl, "MessageBody": MessageBody})
+        return {"MessageId": f"mid-{len(self.messages)}"}
+
+
+_FAKE_SQS = _FakeSqs()
+
+
+def _fake_boto3_client(service_name: str, **kwargs):  # type: ignore[no-untyped-def]
+    if service_name == "s3":
+        return _FakeS3()
+    if service_name == "sqs":
+        return _FAKE_SQS
+    raise RuntimeError(f"unmocked boto3 service: {service_name}")
+
+
+@pytest.fixture()
+def client():  # type: ignore[no-untyped-def]
+    from api.config import get_settings
+    get_settings.cache_clear()
+
+    with (
+        patch("boto3.client", side_effect=_fake_boto3_client),
+        patch("api.services.llm.LLMClient.blueprint", side_effect=_fake_blueprint),
+        patch("api.services.llm.LLMClient.revision_patch", side_effect=_fake_revision),
+    ):
+        from api.main import app
+        from api.models.db import init_db
+
+        with TestClient(app) as c:
+            init_db()
+            yield c
+
+
+def test_full_flow(client: TestClient) -> None:
+    # 1. create template
+    r = client.post("/api/templates", params={"name": "DXデザインシステム"})
+    assert r.status_code == 200, r.text
+    t = r.json()
+    template_id = t["template_id"]
+    assert t["upload_url"].startswith("https://")
+
+    # 2. get template (verify it was stored)
+    r = client.get(f"/api/templates/{template_id}")
+    assert r.status_code == 200, r.text
+    assert r.json()["name"] == "DXデザインシステム"
+
+    # 3. create project
+    r = client.post("/api/projects", json={"name": "A社向け", "template_id": template_id})
+    assert r.status_code == 200, r.text
+    project = r.json()
+    project_id = project["id"]
+
+    # 4. create blueprint (LLM mocked)
+    r = client.post(
+        f"/api/projects/{project_id}/blueprint",
+        json={
+            "intent": "A社向けのDX推進提案書。現状課題、提案、費用、スケジュールを含む",
+            "required_sections": ["課題認識", "提案概要", "費用"],
+            "mode": "freeform",
+        },
+    )
+    assert r.status_code == 200, r.text
+    bp = r.json()
+    assert bp["version"] == 1
+    assert bp["title"].startswith("DX")
+    assert len(bp["slides"]) == 3
+
+    # 5. get latest blueprint
+    r = client.get(f"/api/projects/{project_id}/blueprint")
+    assert r.status_code == 200, r.text
+    assert r.json()["id"] == bp["id"]
+
+    # 6. revise (patch via LLM mock)
+    r = client.post(
+        f"/api/projects/{project_id}/revise",
+        json={"instruction": "タイトルを DX推進ご提案書（更新版） に変えて"},
+    )
+    assert r.status_code == 200, r.text
+    rev = r.json()
+    assert rev["applied"] is True
+    assert isinstance(rev["patch"], list)
+
+    # new blueprint should be version 2
+    r = client.get(f"/api/projects/{project_id}/blueprint")
+    assert r.status_code == 200, r.text
+    latest = r.json()
+    assert latest["version"] == 2
+
+    # 7. request render (queued via SQS stub)
+    r = client.post(f"/api/projects/{project_id}/render")
+    assert r.status_code == 200, r.text
+    rj = r.json()
+    assert rj["status"] == "queued"
+    assert rj["blueprint_id"] == latest["id"]
+    assert len(_FAKE_SQS.messages) == 1
+
+    # 8. preview URL (S3 presigned)
+    r = client.get(f"/api/projects/{project_id}/preview/1")
+    assert r.status_code == 200, r.text
+    assert r.json()["url"].startswith("https://")
+
+    # 9. export URL
+    r = client.get(f"/api/projects/{project_id}/export", params={"format": "pptx"})
+    assert r.status_code == 200, r.text
+    assert r.json()["format"] == "pptx"
+
+
+def test_bad_format_rejected(client: TestClient) -> None:
+    r = client.post("/api/templates", params={"name": "T"})
+    template_id = r.json()["template_id"]
+    r = client.post("/api/projects", json={"name": "P", "template_id": template_id})
+    project_id = r.json()["id"]
+    client.post(
+        f"/api/projects/{project_id}/blueprint",
+        json={"intent": "test", "required_sections": [], "mode": "freeform"},
+    )
+
+    r = client.get(f"/api/projects/{project_id}/export", params={"format": "invalid"})
+    assert r.status_code == 400
+
+
+def test_blueprint_before_project_404(client: TestClient) -> None:
+    r = client.get("/api/projects/00000000-0000-0000-0000-000000000000/blueprint")
+    assert r.status_code == 404
+
+
+def test_revise_without_blueprint_400(client: TestClient) -> None:
+    r = client.post("/api/templates", params={"name": "T"})
+    template_id = r.json()["template_id"]
+    r = client.post("/api/projects", json={"name": "P", "template_id": template_id})
+    project_id = r.json()["id"]
+
+    r = client.post(
+        f"/api/projects/{project_id}/revise",
+        json={"instruction": "何か変えて"},
+    )
+    assert r.status_code == 400

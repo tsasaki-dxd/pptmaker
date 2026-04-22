@@ -35,8 +35,15 @@ app.include_router(projects.router)
 
 @app.on_event("startup")
 def _startup() -> None:
-    if get_settings().env in ("local", "dev"):
+    # `create_all` is idempotent — no-op if tables already exist.
+    # Safe to run on every Lambda cold start.
+    try:
         init_db()
+    except Exception as e:
+        # Don't let a transient DB issue keep the whole Lambda from coming
+        # up; log loudly and let the first actual request surface the
+        # error with CORS headers attached.
+        logging.getLogger("slideforge.startup").exception("init_db failed: %s", e)
 
 
 @app.get("/health")

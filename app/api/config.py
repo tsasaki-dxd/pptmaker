@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from urllib.parse import quote_plus
+
+log = logging.getLogger("slideforge.config")
 
 
 @dataclass(frozen=True)
@@ -23,13 +28,53 @@ class Settings:
     log_level: str
 
 
+def _resolve_db_url() -> str:
+    """Compose the SQLAlchemy DB URL.
+
+    Priority:
+      1. DB_URL env var wins (local dev, explicit override).
+      2. DB_SECRET_ARN + DB_ENDPOINT -> fetch the RDS credentials secret
+         from Secrets Manager and build a postgres URL.
+      3. Fallback to a local SQLite path (useful for unit tests).
+    """
+    override = os.environ.get("DB_URL")
+    if override:
+        return override
+
+    secret_arn = os.environ.get("DB_SECRET_ARN")
+    endpoint = os.environ.get("DB_ENDPOINT")
+    if secret_arn and endpoint:
+        try:
+            import boto3  # lazy import so unit tests without AWS still work
+
+            sm = boto3.client(
+                "secretsmanager",
+                region_name=os.environ.get("AWS_REGION", "ap-northeast-1"),
+            )
+            value = sm.get_secret_value(SecretId=secret_arn)
+            creds = json.loads(value["SecretString"])
+            user = creds["username"]
+            pwd = creds["password"]
+            db_name = creds.get("dbname", "postgres")
+            port = creds.get("port", 5432)
+            return (
+                f"postgresql+psycopg2://{user}:{quote_plus(pwd)}"
+                f"@{endpoint}:{port}/{db_name}"
+            )
+        except Exception as e:
+            log.error("failed to resolve RDS secret: %s", e)
+            raise
+
+    return "sqlite:///./slideforge-local.db"
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings(
         env=os.environ.get("ENV", "dev"),
         aws_region=os.environ.get("AWS_REGION", "ap-northeast-1"),
         s3_bucket=os.environ.get("S3_BUCKET", "slideforge-local"),
-        db_url=os.environ.get("DB_URL", "sqlite:///./slideforge-local.db"),
+        db_url=_resolve_db_url(),
         render_queue_url=os.environ.get("RENDER_QUEUE_URL", ""),
         cognito_user_pool_id=os.environ.get("COGNITO_USER_POOL_ID", ""),
         cognito_client_id=os.environ.get("COGNITO_CLIENT_ID", ""),

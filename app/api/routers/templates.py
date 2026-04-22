@@ -15,6 +15,31 @@ from ..services.storage import Storage
 router = APIRouter(prefix="/api/templates", tags=["templates"])
 
 
+@router.get("", response_model=list[TemplateProfile])
+def list_templates(
+    tenant_id: str = Depends(require_tenant),
+    db: Session = Depends(get_session),
+) -> list[TemplateProfile]:
+    rows = (
+        db.query(TemplateProfileRow)
+        .filter(TemplateProfileRow.tenant_id == tenant_id)
+        .order_by(TemplateProfileRow.created_at.desc())
+        .all()
+    )
+    return [
+        TemplateProfile(
+            id=r.id,
+            tenant_id=r.tenant_id,
+            name=r.name,
+            original_s3_path=r.original_s3_path,
+            design_tokens=r.design_tokens,
+            layouts=r.layouts,
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
 @router.post("", response_model=TemplateCreateResponse)
 def create_template(
     name: str,

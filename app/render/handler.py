@@ -31,7 +31,7 @@ from urllib.parse import urlparse
 import boto3
 
 from .layout_renderer import RenderRequest, render_content_slide
-from .preview import pptx_to_jpegs
+from .preview import pdf_to_jpegs, pptx_to_pdf
 from .template_loader import repack, safe_unpack
 
 log = logging.getLogger("slideforge.render")
@@ -107,19 +107,27 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
         pptx_key = f"{job.out_prefix.rstrip('/')}/output.pptx"
         _upload(out_pptx, pptx_key)
 
+        # Convert once to PDF and upload both the PDF itself (for the
+        # "export as PDF" button) and per-slide JPEGs for the previews.
+        pdf_key: str | None = None
         preview_keys: list[str] = []
         try:
-            jpegs = pptx_to_jpegs(out_pptx, work / "preview")
+            pdf_path = pptx_to_pdf(out_pptx, work / "preview")
+            pdf_key = f"{job.out_prefix.rstrip('/')}/output.pdf"
+            _upload(pdf_path, pdf_key)
+
+            jpegs = pdf_to_jpegs(pdf_path, work / "preview" / "jpeg")
             for idx, jpg in enumerate(jpegs, start=1):
                 key = f"{job.out_prefix.rstrip('/')}/preview/slide-{idx:02d}.jpg"
                 _upload(jpg, key)
                 preview_keys.append(key)
         except Exception:
-            log.exception("preview generation failed for job=%s", job.job_id)
+            log.exception("pdf/preview generation failed for job=%s", job.job_id)
 
         return {
             "job_id": job.job_id,
             "pptx": pptx_key,
+            "pdf": pdf_key,
             "previews": preview_keys,
             "slide_count": len(job.blueprint.get("slides", [])),
         }
