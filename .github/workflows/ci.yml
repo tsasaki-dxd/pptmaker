@@ -86,8 +86,10 @@ jobs:
           CDK_DEFAULT_REGION: ap-northeast-1
 
   # ---------- Deploy (main push only) ----------
-  # GHA is the *producer*: build image, synth + publish assets, upload
-  # artifact, then kick the pipeline. The pipeline does the cdk deploy.
+  # GHA is the *producer*: build image, synth + publish assets, package the
+  # cloud assembly + web source, upload, and kick the pipeline. The pipeline
+  # then does the CFN deploy AND the Next.js build + web sync in one
+  # CodeBuild action. No waiting in GHA.
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -147,11 +149,19 @@ jobs:
             npx cdk-assets publish --path "$manifest"
           done
 
-      - name: Package cloud assembly
+      - name: Package deploy artifact (cdk.out + app/web)
         run: |
-          cd infra
-          zip -r /tmp/cdk.out.zip cdk.out
-          ls -la /tmp/cdk.out.zip
+          # The Deploy CodeBuild runs `cdk deploy App-prod` using cdk.out/,
+          # then builds the Next.js static export from app/web/ and syncs to
+          # the web bucket. Both must be in the artifact.
+          mkdir -p /tmp/deploy
+          cp -r infra/cdk.out /tmp/deploy/cdk.out
+          mkdir -p /tmp/deploy/app
+          cp -r app/web /tmp/deploy/app/web
+          cd /tmp/deploy
+          zip -rq /tmp/deploy.zip .
+          ls -la /tmp/deploy.zip
+          unzip -l /tmp/deploy.zip | head -20
 
       - name: Resolve deploy artifacts from Pipeline Stack outputs
         id: pipeline_outputs
@@ -169,83 +179,26 @@ jobs:
         env:
           DEPLOY_BUCKET: ${{ steps.pipeline_outputs.outputs.deploy_bucket }}
         run: |
-          aws s3 cp /tmp/cdk.out.zip "s3://$DEPLOY_BUCKET/latest/cdk.out.zip"
+          aws s3 cp /tmp/deploy.zip "s3://$DEPLOY_BUCKET/latest/deploy.zip"
           # Keep a SHA-tagged copy for rollback / audit
-          aws s3 cp /tmp/cdk.out.zip "s3://$DEPLOY_BUCKET/by-sha/${{ github.sha }}/cdk.out.zip"
+          aws s3 cp /tmp/deploy.zip "s3://$DEPLOY_BUCKET/by-sha/${{ github.sha }}/deploy.zip"
 
       - name: Trigger CodePipeline
-        id: trigger
         env:
           PIPELINE_NAME: ${{ steps.pipeline_outputs.outputs.pipeline_name }}
         run: |
           EXEC=$(aws codepipeline start-pipeline-execution \
             --name "$PIPELINE_NAME" \
             --query 'pipelineExecutionId' --output text)
-          echo "Pipeline $PIPELINE_NAME execution: $EXEC"
-          echo "exec_id=$EXEC" >> "$GITHUB_OUTPUT"
-
-      - name: Wait for pipeline to finish
-        env:
-          PIPELINE_NAME: ${{ steps.pipeline_outputs.outputs.pipeline_name }}
-          EXEC_ID: ${{ steps.trigger.outputs.exec_id }}
-        run: |
-          echo "Polling pipeline execution $EXEC_ID (timeout 30 min)..."
-          for i in $(seq 1 60); do
-            STATUS=$(aws codepipeline get-pipeline-execution \
-              --pipeline-name "$PIPELINE_NAME" \
-              --pipeline-execution-id "$EXEC_ID" \
-              --query 'pipelineExecution.status' --output text)
-            echo "[$i/60] $STATUS"
-            case "$STATUS" in
-              Succeeded) echo "Pipeline deploy complete"; break ;;
-              Failed|Cancelled|Stopped|Superseded) echo "::error::Pipeline $STATUS"; exit 1 ;;
-            esac
-            sleep 30
-          done
-
-      - name: Read App-prod CFN outputs
-        id: outputs
-        run: |
-          OUT=$(aws cloudformation describe-stacks --stack-name App-prod --query "Stacks[0].Outputs" --output json)
-          get() { echo "$OUT" | jq -r --arg k "$1" '.[] | select(.OutputKey==$k) | .OutputValue'; }
+          echo "Pipeline $PIPELINE_NAME execution started: $EXEC"
           {
-            echo "api_endpoint=$(get ApiEndpoint)"
-            echo "user_pool_id=$(get UserPoolId)"
-            echo "user_pool_client_id=$(get UserPoolClientId)"
-            echo "web_bucket=$(get WebBucketName)"
-            echo "website_url=$(get WebsiteUrl)"
-          } | tee -a "$GITHUB_OUTPUT"
-
-      - name: Build and sync web
-        working-directory: app/web
-        run: |
-          if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
-          npm run build
-          cat > out/config.json <<EOF
-          {
-            "apiEndpoint": "${{ steps.outputs.outputs.api_endpoint }}",
-            "userPoolId": "${{ steps.outputs.outputs.user_pool_id }}",
-            "userPoolClientId": "${{ steps.outputs.outputs.user_pool_client_id }}",
-            "region": "${{ env.AWS_REGION }}"
-          }
-          EOF
-          aws s3 sync out/ "s3://${{ steps.outputs.outputs.web_bucket }}/" \
-            --delete \
-            --cache-control "public, max-age=300"
-          aws s3 cp out/config.json "s3://${{ steps.outputs.outputs.web_bucket }}/config.json" \
-            --cache-control "no-store"
-
-      - name: Summary
-        run: |
-          {
-            echo "# Deployment complete"
+            echo "# Deploy triggered"
             echo ""
-            echo "| Component | Value |"
-            echo "|-----------|-------|"
-            echo "| Website URL | ${{ steps.outputs.outputs.website_url }} |"
-            echo "| API Endpoint | ${{ steps.outputs.outputs.api_endpoint }} |"
-            echo "| User Pool ID | \`${{ steps.outputs.outputs.user_pool_id }}\` |"
+            echo "Pipeline: \`$PIPELINE_NAME\`"
+            echo "Execution: \`$EXEC\`"
             echo ""
-            echo "### Next step"
-            echo "Run **Create User** workflow (Actions tab) to create login accounts."
+            echo "Follow the progress in the CodePipeline console. On success,"
+            echo "the website will be available at the URL in the App-prod"
+            echo "stack's \`WebsiteUrl\` output."
           } >> "$GITHUB_STEP_SUMMARY"
+
