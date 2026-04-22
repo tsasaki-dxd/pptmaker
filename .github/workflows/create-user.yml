@@ -40,7 +40,7 @@ jobs:
       - name: Read UserPool ID from CFN outputs
         id: outputs
         run: |
-          STACK="SlideForgePipelineStack-Prod-App-prod"
+          STACK="App-prod"
           POOL_ID=$(aws cloudformation describe-stacks \
             --stack-name "$STACK" \
             --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" \
