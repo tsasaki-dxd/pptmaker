@@ -157,6 +157,31 @@ jobs:
           # is created with a placeholder ARN and never triggers.
           CODESTAR_CONNECTION_ARN: ${{ secrets.CODESTAR_CONNECTION_ARN }}
         run: |
+          # Prove that the connection ARN is actually plumbed through.
+          # The full ARN ends in the connection ID, which we print for
+          # verification without exposing sensitive parts of the ARN.
+          if [ -z "$CODESTAR_CONNECTION_ARN" ]; then
+            echo "::error::CODESTAR_CONNECTION_ARN env is empty in this step"
+            exit 1
+          fi
+          echo "CODESTAR_CONNECTION_ARN begins with: ${CODESTAR_CONNECTION_ARN:0:40}..."
+          echo "CODESTAR_CONNECTION_ARN length: ${#CODESTAR_CONNECTION_ARN}"
+
+          # Verify the connection actually exists in AWS before deploying
+          if ! aws codeconnections get-connection \
+               --connection-arn "$CODESTAR_CONNECTION_ARN" \
+               --query 'Connection.ConnectionStatus' --output text > /tmp/conn_status 2>/tmp/conn_err; then
+            echo "::error::Failed to read connection. Stderr:"
+            cat /tmp/conn_err
+            exit 1
+          fi
+          STATUS=$(cat /tmp/conn_status)
+          echo "Connection status: $STATUS"
+          if [ "$STATUS" != "AVAILABLE" ]; then
+            echo "::error::Connection is $STATUS, expected AVAILABLE. Authorize it in Developer Tools -> Settings -> Connections."
+            exit 1
+          fi
+
           cdk deploy SlideForgePipelineStack --require-approval never
 
       - name: Write job summary with next steps
