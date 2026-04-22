@@ -34,10 +34,44 @@ class LLMResult:
     model: str
 
 
+_cached_api_key: str | None = None
+
+
+def _get_api_key() -> str:
+    """Resolve the Anthropic API key.
+
+    - ANTHROPIC_API_KEY env var wins if present (local dev, CI).
+    - Otherwise fetch the secret named by ANTHROPIC_API_KEY_SECRET from
+      Secrets Manager. Lambda role must grant secretsmanager:GetSecretValue.
+    Cached at module scope for the lifetime of the Lambda container.
+    """
+    global _cached_api_key
+    if _cached_api_key is not None:
+        return _cached_api_key
+
+    direct = os.environ.get("ANTHROPIC_API_KEY", "")
+    if direct:
+        _cached_api_key = direct
+        return direct
+
+    settings = get_settings()
+    secret_name = settings.anthropic_api_key_secret
+    if not secret_name:
+        _cached_api_key = ""
+        return ""
+
+    import boto3
+
+    sm = boto3.client("secretsmanager", region_name=settings.aws_region)
+    val = sm.get_secret_value(SecretId=secret_name)
+    _cached_api_key = val["SecretString"]
+    return _cached_api_key
+
+
 class LLMClient:
     def __init__(self) -> None:
         self.settings = get_settings()
-        self.client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+        self.client = Anthropic(api_key=_get_api_key())
 
     def blueprint(
         self,

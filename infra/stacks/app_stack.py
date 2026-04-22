@@ -283,15 +283,17 @@ class AppStack(cdk.Stack):
             },
         )
 
+        # CORS intentionally NOT configured at the API Gateway level — the
+        # FastAPI CORSMiddleware inside the Lambda already emits the full
+        # set of Access-Control-* headers for every response. Having both
+        # layers emit them causes duplicate `Access-Control-Allow-Origin`
+        # values and Safari then fails the whole fetch with a generic
+        # "TypeError: Load failed". Keep CORS policy in one place (app code)
+        # so it's inspectable and testable alongside the routes themselves.
         self.http_api = apigw2.HttpApi(
             self,
             "HttpApi",
             api_name=f"slideforge-{stage_name}",
-            cors_preflight=apigw2.CorsPreflightOptions(
-                allow_origins=["*"],
-                allow_methods=[apigw2.CorsHttpMethod.ANY],
-                allow_headers=["Authorization", "Content-Type"],
-            ),
         )
         self.http_api.add_routes(
             path="/{proxy+}",
