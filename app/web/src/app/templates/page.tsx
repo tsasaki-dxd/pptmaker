@@ -1,44 +1,112 @@
 'use client';
 
-import { useState } from 'react';
-import { api } from '@/lib/api';
+import { useCallback, useEffect, useRef, useState } from 'react';
+
+import { api, type TemplateProfile } from '@/lib/api';
 
 export default function TemplatesPage() {
   const [name, setName] = useState('');
-  const [status, setStatus] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [status, setStatus] = useState<string>('');
+  const [uploading, setUploading] = useState(false);
+  const [list, setList] = useState<TemplateProfile[] | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const rows = await api.listTemplates();
+      setList(rows);
+    } catch (e) {
+      setStatus(`一覧取得失敗: ${String(e)}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   async function handleCreate() {
+    if (!name || !file) return;
+    setUploading(true);
     setStatus('作成中...');
     try {
-      const { upload_url } = await api.createTemplate(name);
-      setStatus(`アップロード URL を取得しました。ファイルを PUT してください: ${upload_url.slice(0, 60)}...`);
+      const { template_id, upload_url } = await api.createTemplate(name);
+      setStatus(`アップロード中: ${file.name} (${Math.round(file.size / 1024)} KB)...`);
+      await api.uploadTemplateFile(upload_url, file);
+      setStatus(`✅ 登録完了: template_id = ${template_id}`);
+      setName('');
+      setFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      await refresh();
     } catch (e) {
       setStatus(`失敗: ${String(e)}`);
+    } finally {
+      setUploading(false);
     }
   }
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-2xl font-bold">テンプレート登録</h2>
-      <p className="text-sm text-muted">
-        .pptx テンプレートをアップロードして、レイアウト自動分類＆プロファイル化します。
-      </p>
-      <div className="flex gap-2">
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="テンプレート名"
-          className="flex-1 rounded border border-purple-lt px-3 py-2"
-        />
+    <section className="space-y-6">
+      <div className="space-y-2">
+        <h2 className="text-2xl font-bold">テンプレート登録</h2>
+        <p className="text-sm text-muted">
+          .pptx テンプレートをアップロードすると、以降のプロジェクトで再利用できます。
+        </p>
+      </div>
+
+      <div className="space-y-3 rounded border border-purple-lt/60 bg-white p-4">
+        <label className="block text-sm">
+          <span className="mb-1 block">テンプレート名</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="例: DXデザインシステム_v1"
+            disabled={uploading}
+            className="w-full rounded border border-purple-lt px-3 py-2"
+          />
+        </label>
+        <label className="block text-sm">
+          <span className="mb-1 block">.pptx ファイル</span>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            disabled={uploading}
+            className="w-full text-sm"
+          />
+        </label>
         <button
           onClick={handleCreate}
-          disabled={!name}
+          disabled={!name || !file || uploading}
           className="rounded bg-purple px-4 py-2 text-white disabled:bg-muted"
         >
-          作成
+          {uploading ? 'アップロード中...' : '作成 + アップロード'}
         </button>
+        {status && <p className="text-sm">{status}</p>}
       </div>
-      {status && <p className="text-sm">{status}</p>}
+
+      <div>
+        <h3 className="mb-2 text-lg font-bold">登録済みテンプレート</h3>
+        {list === null ? (
+          <p className="text-sm text-muted">読み込み中…</p>
+        ) : list.length === 0 ? (
+          <p className="text-sm text-muted">まだありません</p>
+        ) : (
+          <ul className="space-y-2">
+            {list.map((t) => (
+              <li
+                key={t.id}
+                className="rounded border border-purple-lt/60 bg-white p-3 text-sm"
+              >
+                <div className="font-medium text-dark">{t.name}</div>
+                <div className="font-mono text-xs text-muted">{t.id}</div>
+                <div className="text-xs text-muted">{new Date(t.created_at).toLocaleString('ja-JP')}</div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </section>
   );
 }
