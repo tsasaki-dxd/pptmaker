@@ -53,6 +53,10 @@ jobs:
               exit 1
             fi
           done
+          if [ -z "${{ secrets.CODESTAR_CONNECTION_ARN }}" ]; then
+            echo "::error::CODESTAR_CONNECTION_ARN is empty. Create a CodeStar Connection (Developer Tools -> Settings -> Connections, GitHub provider, authorize) and set its ARN as a repo Secret named CODESTAR_CONNECTION_ARN."
+            exit 1
+          fi
 
       - name: Install dependencies
         run: |
@@ -148,6 +152,10 @@ jobs:
         env:
           CDK_DEFAULT_ACCOUNT: ${{ steps.acct.outputs.aws_account_id }}
           CDK_DEFAULT_REGION: ${{ secrets.BOOTSTRAP_AWS_REGION }}
+          # Real CodeStar Connection ARN — required so the pipeline's Source
+          # action can actually connect to GitHub. Without this, the pipeline
+          # is created with a placeholder ARN and never triggers.
+          CODESTAR_CONNECTION_ARN: ${{ secrets.CODESTAR_CONNECTION_ARN }}
         run: |
           cdk deploy SlideForgePipelineStack --require-approval never
 
