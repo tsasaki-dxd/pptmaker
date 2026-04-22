@@ -197,8 +197,13 @@ class AppStack(cdk.Stack):
             storage_encryption_key=self.key,
             credentials=rds.Credentials.from_secret(self.db_secret),
             backup_retention=cdk.Duration.days(7 if stage_name == "prod" else 1),
-            deletion_protection=stage_name == "prod",
-            removal_policy=cdk.RemovalPolicy.SNAPSHOT if stage_name == "prod" else cdk.RemovalPolicy.DESTROY,
+            # deletion_protection=False for Phase 1 so CFN can freely recreate
+            # the instance when VPC / subnet config changes (the pipeline's
+            # stuck-stack auto-cleanup also depends on being able to delete).
+            # Phase 2 flips this back on — at that point we have real data
+            # that needs guarding.
+            deletion_protection=False,
+            removal_policy=cdk.RemovalPolicy.DESTROY,
         )
 
         # Shared Anthropic API key (populated during bootstrap, referenced by
