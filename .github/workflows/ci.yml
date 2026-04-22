@@ -153,9 +153,21 @@ jobs:
           zip -r /tmp/cdk.out.zip cdk.out
           ls -la /tmp/cdk.out.zip
 
+      - name: Resolve deploy artifacts from Pipeline Stack outputs
+        id: pipeline_outputs
+        run: |
+          OUT=$(aws cloudformation describe-stacks \
+            --stack-name SlideForgePipelineStack \
+            --query "Stacks[0].Outputs" --output json)
+          get() { echo "$OUT" | jq -r --arg k "$1" '.[] | select(.OutputKey==$k) | .OutputValue'; }
+          {
+            echo "pipeline_name=$(get PipelineName)"
+            echo "deploy_bucket=$(get DeployBucketName)"
+          } | tee -a "$GITHUB_OUTPUT"
+
       - name: Upload artifact to deploy bucket
         env:
-          DEPLOY_BUCKET: slideforge-deploy-${{ steps.acct.outputs.acct }}
+          DEPLOY_BUCKET: ${{ steps.pipeline_outputs.outputs.deploy_bucket }}
         run: |
           aws s3 cp /tmp/cdk.out.zip "s3://$DEPLOY_BUCKET/latest/cdk.out.zip"
           # Keep a SHA-tagged copy for rollback / audit
@@ -163,21 +175,24 @@ jobs:
 
       - name: Trigger CodePipeline
         id: trigger
+        env:
+          PIPELINE_NAME: ${{ steps.pipeline_outputs.outputs.pipeline_name }}
         run: |
           EXEC=$(aws codepipeline start-pipeline-execution \
-            --name SlideForgePipeline \
+            --name "$PIPELINE_NAME" \
             --query 'pipelineExecutionId' --output text)
-          echo "Pipeline execution: $EXEC"
+          echo "Pipeline $PIPELINE_NAME execution: $EXEC"
           echo "exec_id=$EXEC" >> "$GITHUB_OUTPUT"
 
       - name: Wait for pipeline to finish
         env:
+          PIPELINE_NAME: ${{ steps.pipeline_outputs.outputs.pipeline_name }}
           EXEC_ID: ${{ steps.trigger.outputs.exec_id }}
         run: |
           echo "Polling pipeline execution $EXEC_ID (timeout 30 min)..."
           for i in $(seq 1 60); do
             STATUS=$(aws codepipeline get-pipeline-execution \
-              --pipeline-name SlideForgePipeline \
+              --pipeline-name "$PIPELINE_NAME" \
               --pipeline-execution-id "$EXEC_ID" \
               --query 'pipelineExecution.status' --output text)
             echo "[$i/60] $STATUS"
