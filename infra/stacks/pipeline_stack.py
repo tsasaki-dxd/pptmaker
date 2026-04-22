@@ -81,7 +81,22 @@ class PipelineStack(cdk.Stack):
                                 "ls -la",
                                 "test -d cdk.out || (echo 'cdk.out/ missing in artifact' && exit 1)",
                                 "test -d app/web || (echo 'app/web/ missing in artifact' && exit 1)",
-                                # 1. Apply CFN (idempotent; rolls back on failure)
+                                # 0. Recover from a previous deploy that left the stack in
+                                # an un-updatable state. Without this, the very next cdk
+                                # deploy asks for interactive confirmation that CodeBuild
+                                # can't provide and fails with TtyNotAttached.
+                                'echo "=== pre-flight: check App-prod state ==="',
+                                'STATUS=$(aws cloudformation describe-stacks --stack-name App-prod --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "DOES_NOT_EXIST")',
+                                'echo "App-prod status: $STATUS"',
+                                'case "$STATUS" in'
+                                ' CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_FAILED|DELETE_FAILED|REVIEW_IN_PROGRESS|UPDATE_ROLLBACK_FAILED)'
+                                '   echo "Deleting stuck stack before redeploy...";'
+                                '   aws cloudformation delete-stack --stack-name App-prod;'
+                                '   aws cloudformation wait stack-delete-complete --stack-name App-prod;'
+                                '   echo "Delete complete.";;'
+                                ' esac',
+                                # 1. Apply CFN (idempotent; rolls back on failure so next
+                                #    run can update without stuck-state intervention)
                                 'echo "=== cdk deploy App-prod ==="',
                                 "cdk deploy App-prod --app cdk.out --require-approval never --outputs-file /tmp/deploy-outputs.json",
                                 "cat /tmp/deploy-outputs.json",
