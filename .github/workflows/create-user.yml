@@ -52,7 +52,7 @@ jobs:
           echo "user_pool_id=$POOL_ID" >> "$GITHUB_OUTPUT"
           echo "Using User Pool: $POOL_ID"
 
-      - name: Create user (suppress invite email)
+      - name: Create user if missing (suppress invite email)
         env:
           POOL_ID: ${{ steps.outputs.outputs.user_pool_id }}
           EMAIL: ${{ inputs.email }}
@@ -63,11 +63,23 @@ jobs:
           if [ -n "$NAME" ]; then
             ATTRS="$ATTRS Name=name,Value=$NAME"
           fi
-          aws cognito-idp admin-create-user \
-            --user-pool-id "$POOL_ID" \
-            --username "$EMAIL" \
-            --user-attributes $ATTRS \
-            --message-action SUPPRESS
+          # Idempotent: if the user already exists, admin-create-user fails
+          # with UsernameExistsException. Swallow that specific failure so
+          # re-running this workflow works as a password reset.
+          if aws cognito-idp admin-create-user \
+               --user-pool-id "$POOL_ID" \
+               --username "$EMAIL" \
+               --user-attributes $ATTRS \
+               --message-action SUPPRESS 2>/tmp/cu.err; then
+            echo "Created new user $EMAIL"
+          else
+            if grep -q UsernameExistsException /tmp/cu.err; then
+              echo "User $EMAIL already exists — continuing to password reset"
+            else
+              cat /tmp/cu.err
+              exit 1
+            fi
+          fi
 
       - name: Set permanent password
         env:
@@ -86,10 +98,12 @@ jobs:
           EMAIL: ${{ inputs.email }}
         run: |
           {
-            echo "# User created"
+            echo "# User ready"
             echo ""
             echo "- **Email / Username**: \`$EMAIL\`"
             echo "- **Status**: CONFIRMED (permanent password set)"
             echo ""
-            echo "The user can now sign in at the Website URL printed in the last main-branch CI run."
+            echo "Re-running this workflow with the same email acts as a"
+            echo "password reset; supply a new password and it'll replace"
+            echo "the old one."
           } >> "$GITHUB_STEP_SUMMARY"
