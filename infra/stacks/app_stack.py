@@ -13,6 +13,7 @@ from pathlib import Path
 import aws_cdk as cdk
 from aws_cdk import aws_apigatewayv2 as apigw2
 from aws_cdk import aws_apigatewayv2_integrations as apigw2_integ
+from aws_cdk import aws_cloudwatch as cw
 from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_ec2 as ec2
 from aws_cdk import aws_iam as iam
@@ -68,11 +69,13 @@ class AppStack(cdk.Stack):
 
         # Static website hosting for the Next.js SPA. Public-read, no
         # CloudFront in Phase 1 (documented trade-off — HTTP only for
-        # internal use; Phase 2 adds CloudFront + HTTPS).
+        # internal use; Phase 2 adds CloudFront + HTTPS). No explicit
+        # bucket_name — CDK generates a unique one per deploy so we
+        # don't get "bucket already exists" from stray retained buckets
+        # left behind by earlier failed stacks.
         self.web_bucket = s3.Bucket(
             self,
             "WebBucket",
-            bucket_name=f"slideforge-{stage_name}-web-{self.account}",
             website_index_document="index.html",
             website_error_document="index.html",
             public_read_access=True,
@@ -82,8 +85,8 @@ class AppStack(cdk.Stack):
                 ignore_public_acls=False,
                 restrict_public_buckets=False,
             ),
-            removal_policy=cdk.RemovalPolicy.RETAIN if stage_name == "prod" else cdk.RemovalPolicy.DESTROY,
-            auto_delete_objects=stage_name != "prod",
+            removal_policy=cdk.RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
         )
 
         self.vpc = ec2.Vpc(
@@ -287,6 +290,54 @@ class AppStack(cdk.Stack):
             integration=apigw2_integ.HttpLambdaIntegration(
                 "ApiIntegration",
                 handler=self.api_function,
+            ),
+        )
+
+        # ---- Observability (formerly a separate stack) ----
+        cw.Alarm(
+            self,
+            "ApiErrors",
+            metric=self.api_function.metric_errors(period=cdk.Duration.minutes(5)),
+            threshold=5,
+            evaluation_periods=3,
+            alarm_description=f"API Lambda errors ({stage_name})",
+        )
+        cw.Alarm(
+            self,
+            "RenderFailures",
+            metric=self.render_function.metric_errors(period=cdk.Duration.minutes(5)),
+            threshold=3,
+            evaluation_periods=3,
+            alarm_description=f"Render Lambda errors ({stage_name})",
+        )
+        cw.Alarm(
+            self,
+            "ApiDuration",
+            metric=self.api_function.metric_duration(period=cdk.Duration.minutes(5)),
+            threshold=5000,
+            evaluation_periods=3,
+            alarm_description=f"API p95 duration > 5s ({stage_name})",
+        )
+        dashboard = cw.Dashboard(
+            self,
+            "SlideForgeDashboard",
+            dashboard_name=f"SlideForge-{stage_name}",
+        )
+        dashboard.add_widgets(
+            cw.GraphWidget(
+                title="API Invocations / Errors",
+                left=[self.api_function.metric_invocations(), self.api_function.metric_errors()],
+                width=12,
+            ),
+            cw.GraphWidget(
+                title="Render Invocations / Errors",
+                left=[self.render_function.metric_invocations(), self.render_function.metric_errors()],
+                width=12,
+            ),
+            cw.GraphWidget(
+                title="API Duration (ms)",
+                left=[self.api_function.metric_duration()],
+                width=12,
             ),
         )
 

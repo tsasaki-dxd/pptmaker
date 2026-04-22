@@ -14,6 +14,7 @@ env:
   AWS_REGION: ap-northeast-1
 
 jobs:
+  # ---------- Validation (PR only) ----------
   lint-test:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -84,17 +85,33 @@ jobs:
           CDK_DEFAULT_ACCOUNT: '000000000000'
           CDK_DEFAULT_REGION: ap-northeast-1
 
-  render-image:
-    runs-on: ubuntu-latest
+  # ---------- Deploy (main push only) ----------
+  # GHA is the *producer*: build image, synth + publish assets, upload
+  # artifact, then kick the pipeline. The pipeline does the cdk deploy.
+  deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Resolve account
+        id: acct
+        run: |
+          ACCT=$(aws sts get-caller-identity --query Account --output text)
+          echo "acct=$ACCT" >> "$GITHUB_OUTPUT"
 
       - name: Login to ECR
         id: ecr
@@ -110,46 +127,71 @@ jobs:
           docker tag "$REG/$REPO:${{ github.sha }}" "$REG/$REPO:prod"
           docker push "$REG/$REPO:prod"
 
-  web-deploy:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [render-image]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-
-      - name: Wait for CodePipeline Prod stage to succeed
+      - name: Install CDK + infra deps
         run: |
-          echo "Polling SlideForgePipeline for Prod stage completion (timeout 30 min)..."
+          npm install -g aws-cdk cdk-assets
+          pip install -r infra/requirements.txt
+
+      - name: cdk synth
+        working-directory: infra
+        env:
+          CDK_DEFAULT_ACCOUNT: ${{ steps.acct.outputs.acct }}
+          CDK_DEFAULT_REGION: ${{ env.AWS_REGION }}
+        run: cdk synth --quiet
+
+      - name: Publish CDK assets (Lambda zip, Docker images)
+        working-directory: infra/cdk.out
+        run: |
+          for manifest in *.assets.json; do
+            echo "Publishing $manifest..."
+            npx cdk-assets publish --path "$manifest"
+          done
+
+      - name: Package cloud assembly
+        run: |
+          cd infra
+          zip -r /tmp/cdk.out.zip cdk.out
+          ls -la /tmp/cdk.out.zip
+
+      - name: Upload artifact to deploy bucket
+        env:
+          DEPLOY_BUCKET: slideforge-deploy-${{ steps.acct.outputs.acct }}
+        run: |
+          aws s3 cp /tmp/cdk.out.zip "s3://$DEPLOY_BUCKET/latest/cdk.out.zip"
+          # Keep a SHA-tagged copy for rollback / audit
+          aws s3 cp /tmp/cdk.out.zip "s3://$DEPLOY_BUCKET/by-sha/${{ github.sha }}/cdk.out.zip"
+
+      - name: Trigger CodePipeline
+        id: trigger
+        run: |
+          EXEC=$(aws codepipeline start-pipeline-execution \
+            --name SlideForgePipeline \
+            --query 'pipelineExecutionId' --output text)
+          echo "Pipeline execution: $EXEC"
+          echo "exec_id=$EXEC" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for pipeline to finish
+        env:
+          EXEC_ID: ${{ steps.trigger.outputs.exec_id }}
+        run: |
+          echo "Polling pipeline execution $EXEC_ID (timeout 30 min)..."
           for i in $(seq 1 60); do
-            STATUS=$(aws codepipeline get-pipeline-state \
-              --name SlideForgePipeline \
-              --query "stageStates[?stageName=='Prod'].latestExecution.status" \
-              --output text 2>/dev/null || echo "Unknown")
-            echo "[$i/60] Prod stage: $STATUS"
+            STATUS=$(aws codepipeline get-pipeline-execution \
+              --pipeline-name SlideForgePipeline \
+              --pipeline-execution-id "$EXEC_ID" \
+              --query 'pipelineExecution.status' --output text)
+            echo "[$i/60] $STATUS"
             case "$STATUS" in
-              Succeeded) echo "Pipeline deploy complete"; exit 0 ;;
-              Failed|Cancelled|Stopped) echo "::error::Pipeline failed: $STATUS"; exit 1 ;;
+              Succeeded) echo "Pipeline deploy complete"; break ;;
+              Failed|Cancelled|Stopped|Superseded) echo "::error::Pipeline $STATUS"; exit 1 ;;
             esac
             sleep 30
           done
-          echo "::error::Timeout waiting for pipeline"
-          exit 1
 
       - name: Read App-prod CFN outputs
         id: outputs
         run: |
-          STACK="SlideForgePipelineStack-Prod-App-prod"
-          OUT=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs" --output json)
+          OUT=$(aws cloudformation describe-stacks --stack-name App-prod --query "Stacks[0].Outputs" --output json)
           get() { echo "$OUT" | jq -r --arg k "$1" '.[] | select(.OutputKey==$k) | .OutputValue'; }
           {
             echo "api_endpoint=$(get ApiEndpoint)"
@@ -159,31 +201,23 @@ jobs:
             echo "website_url=$(get WebsiteUrl)"
           } | tee -a "$GITHUB_OUTPUT"
 
-      - name: Install and build Next.js
+      - name: Build and sync web
         working-directory: app/web
         run: |
           if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
           npm run build
-
-      - name: Write runtime config.json
-        run: |
-          cat > app/web/out/config.json <<EOF
+          cat > out/config.json <<EOF
           {
             "apiEndpoint": "${{ steps.outputs.outputs.api_endpoint }}",
             "userPoolId": "${{ steps.outputs.outputs.user_pool_id }}",
             "userPoolClientId": "${{ steps.outputs.outputs.user_pool_client_id }}",
-            "region": "${{ vars.AWS_REGION }}"
+            "region": "${{ env.AWS_REGION }}"
           }
           EOF
-          cat app/web/out/config.json
-
-      - name: Sync to S3 web bucket
-        run: |
-          aws s3 sync app/web/out/ "s3://${{ steps.outputs.outputs.web_bucket }}/" \
+          aws s3 sync out/ "s3://${{ steps.outputs.outputs.web_bucket }}/" \
             --delete \
             --cache-control "public, max-age=300"
-          # config.json should never be cached — runtime settings
-          aws s3 cp app/web/out/config.json "s3://${{ steps.outputs.outputs.web_bucket }}/config.json" \
+          aws s3 cp out/config.json "s3://${{ steps.outputs.outputs.web_bucket }}/config.json" \
             --cache-control "no-store"
 
       - name: Summary
