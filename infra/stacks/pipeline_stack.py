@@ -76,60 +76,85 @@ class PipelineStack(cdk.Stack):
                             ],
                         },
                         "build": {
+                            # CodeBuild runs each list item in its own shell, so
+                            # variables/functions don't survive between items.
+                            # Do the whole deploy as a single script so the
+                            # `get()` helper and $OUT are in scope throughout.
                             "commands": [
-                                "set -euo pipefail",
-                                "ls -la",
-                                "test -d cdk.out || (echo 'cdk.out/ missing in artifact' && exit 1)",
-                                "test -d app/web || (echo 'app/web/ missing in artifact' && exit 1)",
-                                # 0. Recover from a previous deploy that left the stack in
-                                # an un-updatable state. Without this, the very next cdk
-                                # deploy asks for interactive confirmation that CodeBuild
-                                # can't provide and fails with TtyNotAttached.
-                                'echo "=== pre-flight: check App-prod state ==="',
-                                'STATUS=$(aws cloudformation describe-stacks --stack-name App-prod --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "DOES_NOT_EXIST")',
-                                'echo "App-prod status: $STATUS"',
-                                'case "$STATUS" in'
-                                ' CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_FAILED|DELETE_FAILED|REVIEW_IN_PROGRESS|UPDATE_ROLLBACK_FAILED)'
-                                '   echo "Deleting stuck stack before redeploy...";'
-                                '   aws cloudformation delete-stack --stack-name App-prod;'
-                                '   aws cloudformation wait stack-delete-complete --stack-name App-prod;'
-                                '   echo "Delete complete.";;'
-                                ' esac',
-                                # 1. Apply CFN (idempotent; rolls back on failure so next
-                                #    run can update without stuck-state intervention)
-                                'echo "=== cdk deploy App-prod ==="',
-                                "cdk deploy App-prod --app cdk.out --require-approval never --outputs-file /tmp/deploy-outputs.json",
-                                "cat /tmp/deploy-outputs.json",
-                                # 2. Pull outputs we need for the web deploy
-                                'echo "=== reading CfnOutputs ==="',
-                                'OUT=$(aws cloudformation describe-stacks --stack-name App-prod --query "Stacks[0].Outputs" --output json)',
-                                'get() { echo "$OUT" | jq -r --arg k "$1" \'.[] | select(.OutputKey==$k) | .OutputValue\'; }',
-                                'API_ENDPOINT=$(get ApiEndpoint)',
-                                'USER_POOL_ID=$(get UserPoolId)',
-                                'USER_POOL_CLIENT_ID=$(get UserPoolClientId)',
-                                'WEB_BUCKET=$(get WebBucketName)',
-                                'WEBSITE_URL=$(get WebsiteUrl)',
-                                'echo "Website will be at: $WEBSITE_URL"',
-                                # 3. Build the SPA
-                                'echo "=== build Next.js ==="',
-                                "cd app/web",
-                                "if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi",
-                                "npm run build",
-                                # 4. Inject runtime config
-                                'cat > out/config.json <<EOF\n'
-                                '{\n'
-                                '  "apiEndpoint": "$API_ENDPOINT",\n'
-                                '  "userPoolId": "$USER_POOL_ID",\n'
-                                '  "userPoolClientId": "$USER_POOL_CLIENT_ID",\n'
-                                '  "region": "$AWS_DEFAULT_REGION"\n'
-                                '}\n'
-                                'EOF',
-                                "cat out/config.json",
-                                # 5. Sync to web bucket
-                                'echo "=== sync to S3 web bucket ==="',
-                                'aws s3 sync out/ "s3://$WEB_BUCKET/" --delete --cache-control "public, max-age=300"',
-                                'aws s3 cp out/config.json "s3://$WEB_BUCKET/config.json" --cache-control "no-store"',
-                                'echo "=== done. Website: $WEBSITE_URL ==="',
+                                """
+set -euo pipefail
+
+ls -la
+test -d cdk.out || { echo 'cdk.out/ missing in artifact'; exit 1; }
+test -d app/web || { echo 'app/web/ missing in artifact'; exit 1; }
+
+# ---- 0. pre-flight: clear a stuck App-prod stack ----
+# Without this, a previous CREATE_FAILED / ROLLBACK_COMPLETE stack
+# makes the next `cdk deploy` prompt for continue/rollback/abort,
+# which CodeBuild (no TTY) cannot answer, and the whole build dies.
+echo "=== pre-flight: check App-prod state ==="
+STATUS=$(aws cloudformation describe-stacks \
+  --stack-name App-prod \
+  --query 'Stacks[0].StackStatus' \
+  --output text 2>/dev/null || echo "DOES_NOT_EXIST")
+echo "App-prod status: $STATUS"
+case "$STATUS" in
+  CREATE_FAILED|ROLLBACK_COMPLETE|ROLLBACK_FAILED|DELETE_FAILED|REVIEW_IN_PROGRESS|UPDATE_ROLLBACK_FAILED)
+    echo "Deleting stuck stack before redeploy..."
+    aws cloudformation delete-stack --stack-name App-prod
+    aws cloudformation wait stack-delete-complete --stack-name App-prod
+    echo "Delete complete."
+    ;;
+esac
+
+# ---- 1. apply CFN ----
+echo "=== cdk deploy App-prod ==="
+cdk deploy App-prod \
+  --app cdk.out \
+  --require-approval never \
+  --outputs-file /tmp/deploy-outputs.json
+cat /tmp/deploy-outputs.json
+
+# ---- 2. read CfnOutputs ----
+echo "=== reading CfnOutputs ==="
+OUT=$(aws cloudformation describe-stacks \
+  --stack-name App-prod \
+  --query 'Stacks[0].Outputs' \
+  --output json)
+get() {
+  echo "$OUT" | jq -r --arg k "$1" '.[] | select(.OutputKey==$k) | .OutputValue'
+}
+API_ENDPOINT=$(get ApiEndpoint)
+USER_POOL_ID=$(get UserPoolId)
+USER_POOL_CLIENT_ID=$(get UserPoolClientId)
+WEB_BUCKET=$(get WebBucketName)
+WEBSITE_URL=$(get WebsiteUrl)
+echo "Website will be at: $WEBSITE_URL"
+
+# ---- 3. build the SPA ----
+echo "=== build Next.js ==="
+cd app/web
+if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi
+npm run build
+
+# ---- 4. inject runtime config ----
+cat > out/config.json <<EOF
+{
+  "apiEndpoint": "$API_ENDPOINT",
+  "userPoolId": "$USER_POOL_ID",
+  "userPoolClientId": "$USER_POOL_CLIENT_ID",
+  "region": "$AWS_DEFAULT_REGION"
+}
+EOF
+cat out/config.json
+
+# ---- 5. sync to web bucket ----
+echo "=== sync to S3 web bucket ==="
+aws s3 sync out/ "s3://$WEB_BUCKET/" --delete --cache-control "public, max-age=300"
+aws s3 cp out/config.json "s3://$WEB_BUCKET/config.json" --cache-control "no-store"
+
+echo "=== done. Website: $WEBSITE_URL ==="
+""".strip(),
                             ],
                         },
                     },
