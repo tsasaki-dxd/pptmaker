@@ -100,10 +100,14 @@ class PipelineStack(cdk.Stack):
             iam.ManagedPolicy.from_aws_managed_policy_name("AdministratorAccess"),
         )
 
-        codepipeline.Pipeline(
+        pipeline = codepipeline.Pipeline(
             self,
             "Pipeline",
-            pipeline_name="SlideForgePipeline",
+            # Intentionally *no* pipeline_name: the upgrade path from the
+            # previous CDK Pipelines setup keeps the old Pipeline around
+            # during the CFN update, and a fixed name would collide with
+            # the old one during change-set validation. Let CDK generate
+            # a unique name; GHA reads the actual name from CfnOutput.
             artifact_bucket=self.deploy_bucket,
             restart_execution_on_update=False,
             stages=[
@@ -134,5 +138,5 @@ class PipelineStack(cdk.Stack):
             ],
         )
 
-        cdk.CfnOutput(self, "PipelineName", value="SlideForgePipeline")
+        cdk.CfnOutput(self, "PipelineName", value=pipeline.pipeline_name)
         cdk.CfnOutput(self, "DeployBucketName", value=self.deploy_bucket.bucket_name)
