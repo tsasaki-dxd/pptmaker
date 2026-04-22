@@ -107,16 +107,34 @@ class AppStack(cdk.Stack):
             auto_delete_objects=True,
         )
 
+        # Why a NAT Gateway here:
+        #
+        # The API Lambda lives in the VPC so it can reach RDS. It also has
+        # to call out to:
+        #   - secretsmanager.ap-northeast-1.amazonaws.com (DB creds, Anthropic key)
+        #   - api.anthropic.com (Claude)
+        #   - cognito-idp.ap-northeast-1.amazonaws.com (JWKS)
+        #   - sqs/s3/kms regional endpoints
+        #
+        # PRIVATE_ISOLATED subnets have no default route, so every external
+        # call hangs until Lambda times out. One NAT Gateway in a single AZ
+        # gives the API Lambda internet egress. Costs ~3,500 JPY/month,
+        # which we absorb as a Phase 1 trade-off for actually being able to
+        # call Claude.
         self.vpc = ec2.Vpc(
             self,
             "Vpc",
             availability_zones=["ap-northeast-1a", "ap-northeast-1c"],
-            nat_gateways=0,
+            nat_gateways=1,
             subnet_configuration=[
-                ec2.SubnetConfiguration(name="public", subnet_type=ec2.SubnetType.PUBLIC, cidr_mask=24),
                 ec2.SubnetConfiguration(
-                    name="isolated",
-                    subnet_type=ec2.SubnetType.PRIVATE_ISOLATED,
+                    name="public",
+                    subnet_type=ec2.SubnetType.PUBLIC,
+                    cidr_mask=24,
+                ),
+                ec2.SubnetConfiguration(
+                    name="private",
+                    subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
                     cidr_mask=24,
                 ),
             ],
@@ -171,7 +189,7 @@ class AppStack(cdk.Stack):
             ),
             instance_type=ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.SMALL),
             vpc=self.vpc,
-            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_ISOLATED),
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS),
             security_groups=[rds_sg],
             multi_az=False,
             allocated_storage=20,
@@ -287,7 +305,7 @@ class AppStack(cdk.Stack):
             timeout=cdk.Duration.seconds(60),
             role=api_role,
             vpc=self.vpc,
-            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_ISOLATED),
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS),
             security_groups=[lambda_sg],
             environment={
                 "ENV": stage_name,
