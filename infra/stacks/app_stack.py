@@ -50,6 +50,24 @@ class AppStack(cdk.Stack):
             encryption=s3.BucketEncryption.KMS,
             encryption_key=self.key,
             block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            cors=[
+                # Allow browser PUTs against presigned URLs (template upload)
+                # and GETs when the user opens a preview URL from the SPA.
+                # Phase 1 uses "*" for origin since the web bucket name is
+                # only known after first deploy; Phase 2 should lock this
+                # down to the exact CloudFront/website origin.
+                s3.CorsRule(
+                    allowed_methods=[
+                        s3.HttpMethods.GET,
+                        s3.HttpMethods.PUT,
+                        s3.HttpMethods.HEAD,
+                    ],
+                    allowed_origins=["*"],
+                    allowed_headers=["*"],
+                    exposed_headers=["ETag"],
+                    max_age=3000,
+                ),
+            ],
             enforce_ssl=True,
             versioned=stage_name == "prod",
             lifecycle_rules=[

@@ -9,6 +9,10 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 LayoutKind = Literal["cover", "toc", "section_divider", "content", "about", "disclaimer"]
+
+# Only figure types with a concrete renderer in app/render/figure_renderers/.
+# Keep this list in sync with the FIGURE_CATALOG the LLM is given so that
+# schema validation mirrors the render pipeline's actual capabilities.
 FigureType = Literal[
     "table",
     "cards_grid",
@@ -16,10 +20,7 @@ FigureType = Literal[
     "timeline",
     "stat_callout",
     "bullet_list",
-    "process_flow",
     "comparison",
-    "stack_bar",
-    "cost_breakdown",
 ]
 
 
