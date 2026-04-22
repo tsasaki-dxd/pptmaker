@@ -182,7 +182,44 @@ jobs:
             exit 1
           fi
 
+          # Verify Python sees the env var too (the actual synth process)
+          echo "--- Python view ---"
+          python3 -c "
+          import os
+          v = os.environ.get('CODESTAR_CONNECTION_ARN', '')
+          print(f'Python sees len={len(v)}, starts_with={v[:40]!r}, ends_with={v[-20:]!r}' if v else 'Python sees EMPTY')
+          "
+
+          # Synth only the pipeline stack (no app stage / no Docker bundling)
+          # and verify the resulting template has the real connection ARN
+          echo "--- Synth diagnostic ---"
+          cdk synth SlideForgePipelineStack --quiet -o /tmp/synth-pipeline > /tmp/synth.log 2>&1 || { cat /tmp/synth.log; echo "::error::synth failed"; exit 1; }
+          TEMPLATE=/tmp/synth-pipeline/SlideForgePipelineStack.template.json
+          if [ -f "$TEMPLATE" ]; then
+            echo "Connection ARNs found in synthesized template:"
+            grep -oE '"ConnectionArn":\s*"[^"]+"' "$TEMPLATE" | sort -u
+            if grep -q '000000000000:connection/placeholder' "$TEMPLATE"; then
+              echo "::error::Synth produced placeholder ARN even though env var was set."
+              exit 1
+            fi
+          else
+            echo "::warning::$TEMPLATE not produced (synth may have bailed before writing it)"
+          fi
+          rm -rf /tmp/synth-pipeline
+
+          echo "--- cdk diff (what will change on deploy) ---"
+          cdk diff SlideForgePipelineStack 2>&1 | head -60 || true
+
           cdk deploy SlideForgePipelineStack --require-approval never
+
+          echo "--- Post-deploy verification ---"
+          aws codepipeline get-pipeline --name SlideForgePipeline \
+            --query 'pipeline.stages[0].actions[0].configuration.ConnectionArn' \
+            --output text | tee /tmp/deployed_arn
+          if grep -q "000000000000:connection/placeholder" /tmp/deployed_arn; then
+            echo "::error::Pipeline still has placeholder after deploy."
+            exit 1
+          fi
 
       - name: Write job summary with next steps
         if: always()

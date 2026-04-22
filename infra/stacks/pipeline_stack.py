@@ -48,6 +48,12 @@ class PipelineStack(cdk.Stack):
         synth = pipelines.ShellStep(
             "Synth",
             input=source,
+            # Propagate the connection ARN into the pipeline's own Synth
+            # CodeBuild. Without this, when the pipeline self-mutates, its
+            # Synth step runs `cdk synth` without CODESTAR_CONNECTION_ARN
+            # and pipeline_stack.py falls back to the placeholder — which
+            # then overwrites the live pipeline with a broken Source ARN.
+            env={"CODESTAR_CONNECTION_ARN": connection_arn},
             commands=[
                 "cd infra",
                 "pip install -r requirements.txt",
