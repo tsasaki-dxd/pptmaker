@@ -118,7 +118,7 @@ class AppStack(cdk.Stack):
         rds_sg.add_ingress_rule(
             peer=lambda_sg,
             connection=ec2.Port.tcp(5432),
-            description="Allow Lambda -> RDS",
+            description="Allow Lambda to RDS",
         )
 
         self.db_secret = sm.Secret(
