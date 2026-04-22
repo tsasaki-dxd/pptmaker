@@ -1,15 +1,22 @@
 """
 CodePipeline Stack (simplified single-stage CD).
 
-Scope: take a pre-synthesized cloud assembly uploaded to S3 by GHA,
-run `cdk deploy` inside a CodeBuild action, apply the resulting
-template to `SlideForge-App-prod`. Nothing more.
+Scope: take a pre-synthesized cloud assembly + `app/web` source uploaded
+to S3 by GHA, and in one CodeBuild action do everything a deploy needs:
+
+  1. cdk deploy App-prod                   (applies CFN template)
+  2. read App-prod's CfnOutputs            (ApiEndpoint, WebBucketName, ...)
+  3. npm run build in app/web              (static Next.js export)
+  4. write runtime config.json             (api endpoint + cognito ids)
+  5. aws s3 sync out/ -> web bucket        (publish the SPA)
+
+GHA's job ends at "StartPipelineExecution" — no waiting, no reading
+CfnOutputs, no S3 sync. The pipeline owns the deploy end-to-end.
 
 Deliberately NOT using `pipelines.CodePipeline` — self-mutation,
 Assets stage, CodeStar Connection, and the Synth stage it insisted
 on were the source of every pipeline-side bug we hit. Here we own
-the orchestration explicitly: GHA synths, uploads artifacts, and
-calls StartPipelineExecution. Pipeline only does CFN deploy.
+the orchestration explicitly.
 """
 
 from __future__ import annotations
@@ -27,7 +34,10 @@ class PipelineStack(cdk.Stack):
     def __init__(self, scope: Construct, id_: str, **kwargs) -> None:
         super().__init__(scope, id_, **kwargs)
 
-        # GHA uploads `cdk.out.zip` here, then calls StartPipelineExecution.
+        # GHA uploads `deploy.zip` here, then calls StartPipelineExecution.
+        # The zip is expected to contain:
+        #   cdk.out/    pre-synthesized cloud assembly
+        #   app/web/    Next.js source (pipeline runs `npm run build`)
         self.deploy_bucket = s3.Bucket(
             self,
             "DeployArtifacts",
@@ -45,17 +55,15 @@ class PipelineStack(cdk.Stack):
             ],
         )
 
-        source_output = codepipeline.Artifact("CdkOutput")
+        source_output = codepipeline.Artifact("DeployInput")
 
-        # CodeBuild project that runs `cdk deploy` against the pre-synthesized
-        # cloud assembly in the source artifact.
         deploy_project = codebuild.PipelineProject(
             self,
             "CdkDeployProject",
-            project_name="SlideForge-CdkDeploy",
+            project_name="SlideForge-Deploy",
             environment=codebuild.BuildEnvironment(
                 build_image=codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
-                privileged=True,  # not used today, kept for future Docker assets
+                privileged=True,
             ),
             build_spec=codebuild.BuildSpec.from_object(
                 {
@@ -69,33 +77,54 @@ class PipelineStack(cdk.Stack):
                         },
                         "build": {
                             "commands": [
-                                # The zip from S3 is extracted at $CODEBUILD_SRC_DIR.
-                                # Expect it to contain a `cdk.out/` directory.
+                                "set -euo pipefail",
                                 "ls -la",
-                                "test -d cdk.out || (echo 'cdk.out not found in artifact' && exit 1)",
-                                # `cdk deploy -a cdk.out` skips synth and uses the
-                                # cloud assembly as-is. Asset publishing happens here
-                                # (or is a no-op if GHA already published them).
-                                "cdk deploy App-prod "
-                                "--app cdk.out "
-                                "--require-approval never "
-                                "--no-rollback "
-                                "--outputs-file deploy-outputs.json",
-                                "cat deploy-outputs.json || true",
+                                "test -d cdk.out || (echo 'cdk.out/ missing in artifact' && exit 1)",
+                                "test -d app/web || (echo 'app/web/ missing in artifact' && exit 1)",
+                                # 1. Apply CFN (idempotent; rolls back on failure)
+                                'echo "=== cdk deploy App-prod ==="',
+                                "cdk deploy App-prod --app cdk.out --require-approval never --outputs-file /tmp/deploy-outputs.json",
+                                "cat /tmp/deploy-outputs.json",
+                                # 2. Pull outputs we need for the web deploy
+                                'echo "=== reading CfnOutputs ==="',
+                                'OUT=$(aws cloudformation describe-stacks --stack-name App-prod --query "Stacks[0].Outputs" --output json)',
+                                'get() { echo "$OUT" | jq -r --arg k "$1" \'.[] | select(.OutputKey==$k) | .OutputValue\'; }',
+                                'API_ENDPOINT=$(get ApiEndpoint)',
+                                'USER_POOL_ID=$(get UserPoolId)',
+                                'USER_POOL_CLIENT_ID=$(get UserPoolClientId)',
+                                'WEB_BUCKET=$(get WebBucketName)',
+                                'WEBSITE_URL=$(get WebsiteUrl)',
+                                'echo "Website will be at: $WEBSITE_URL"',
+                                # 3. Build the SPA
+                                'echo "=== build Next.js ==="',
+                                "cd app/web",
+                                "if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund; fi",
+                                "npm run build",
+                                # 4. Inject runtime config
+                                'cat > out/config.json <<EOF\n'
+                                '{\n'
+                                '  "apiEndpoint": "$API_ENDPOINT",\n'
+                                '  "userPoolId": "$USER_POOL_ID",\n'
+                                '  "userPoolClientId": "$USER_POOL_CLIENT_ID",\n'
+                                '  "region": "$AWS_DEFAULT_REGION"\n'
+                                '}\n'
+                                'EOF',
+                                "cat out/config.json",
+                                # 5. Sync to web bucket
+                                'echo "=== sync to S3 web bucket ==="',
+                                'aws s3 sync out/ "s3://$WEB_BUCKET/" --delete --cache-control "public, max-age=300"',
+                                'aws s3 cp out/config.json "s3://$WEB_BUCKET/config.json" --cache-control "no-store"',
+                                'echo "=== done. Website: $WEBSITE_URL ==="',
                             ],
                         },
-                    },
-                    "artifacts": {
-                        "files": ["deploy-outputs.json"],
                     },
                 }
             ),
         )
 
-        # The CodeBuild role needs to assume the CDK bootstrap deploy/publishing
-        # roles (created by `cdk bootstrap`). AdministratorAccess is the
-        # pragmatic Phase 1 choice; Phase 2 tightens to the four named cdk-*
-        # roles explicitly.
+        # CodeBuild role needs to: assume CDK bootstrap roles, call CFN,
+        # read/write many services. AdministratorAccess is the pragmatic
+        # Phase 1 choice; Phase 2 tightens to least-privilege.
         deploy_project.role.add_managed_policy(  # type: ignore[union-attr]
             iam.ManagedPolicy.from_aws_managed_policy_name("AdministratorAccess"),
         )
@@ -103,11 +132,8 @@ class PipelineStack(cdk.Stack):
         pipeline = codepipeline.Pipeline(
             self,
             "Pipeline",
-            # Intentionally *no* pipeline_name: the upgrade path from the
-            # previous CDK Pipelines setup keeps the old Pipeline around
-            # during the CFN update, and a fixed name would collide with
-            # the old one during change-set validation. Let CDK generate
-            # a unique name; GHA reads the actual name from CfnOutput.
+            # No fixed pipeline_name — avoids collision with any pipeline
+            # previously deployed under the same name during CFN updates.
             artifact_bucket=self.deploy_bucket,
             restart_execution_on_update=False,
             stages=[
@@ -117,9 +143,7 @@ class PipelineStack(cdk.Stack):
                         cpa.S3SourceAction(
                             action_name="S3Source",
                             bucket=self.deploy_bucket,
-                            bucket_key="latest/cdk.out.zip",
-                            # Triggered explicitly by GHA via StartPipelineExecution;
-                            # do not also subscribe to EventBridge.
+                            bucket_key="latest/deploy.zip",
                             trigger=cpa.S3Trigger.NONE,
                             output=source_output,
                         ),
@@ -129,7 +153,7 @@ class PipelineStack(cdk.Stack):
                     stage_name="Deploy",
                     actions=[
                         cpa.CodeBuildAction(
-                            action_name="CdkDeploy",
+                            action_name="CdkDeployAndWebSync",
                             project=deploy_project,
                             input=source_output,
                         ),

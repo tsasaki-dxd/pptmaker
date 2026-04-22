@@ -141,7 +141,16 @@ class AppStack(cdk.Stack):
         self.db = rds.DatabaseInstance(
             self,
             "Db",
-            engine=rds.DatabaseInstanceEngine.postgres(version=rds.PostgresEngineVersion.VER_16_3),
+            # PostgresEngineVersion.of() lets us pick an exact supported
+            # minor version without being limited to whatever the installed
+            # CDK's named enum happens to include. AWS deprecates minor
+            # versions over time, so pinning to e.g. VER_16_3 will start
+            # failing with "Cannot find version 16.3 for postgres" once
+            # AWS drops it. 16.6 is the current long-term-supported 16.x
+            # at time of writing.
+            engine=rds.DatabaseInstanceEngine.postgres(
+                version=rds.PostgresEngineVersion.of("16.6", "16"),
+            ),
             instance_type=ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.SMALL),
             vpc=self.vpc,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_ISOLATED),
