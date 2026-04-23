@@ -79,8 +79,13 @@ class LLMClient:
         required_sections: list[str],
         aux_context: str | None,
         template_summary: str,
-        figure_catalog: str,
     ) -> LLMResult:
+        # The blueprint_system prompt already carries the full layout /
+        # figure_type enums + JSON skeletons (single source of truth).
+        # Second block is just the per-template summary, which changes
+        # per project but is stable across retries — cache it too so
+        # repeated blueprint/revise calls on the same template get a
+        # cache hit.
         system_blocks = [
             {
                 "type": "text",
@@ -89,7 +94,7 @@ class LLMClient:
             },
             {
                 "type": "text",
-                "text": f"【テンプレートプロファイル】\n{template_summary}\n\n【figure_type カタログ】\n{figure_catalog}",
+                "text": f"【テンプレートプロファイル】\n{template_summary}",
                 "cache_control": {"type": "ephemeral"},
             },
         ]
