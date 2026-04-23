@@ -244,3 +244,63 @@ def test_revise_without_blueprint_400(client: TestClient) -> None:
         json={"instruction": "何か変えて"},
     )
     assert r.status_code == 400
+
+
+def test_duplicate_project_copies_blueprint(client: TestClient) -> None:
+    import json as _json
+    from api.blueprint_worker import handler as _bp_worker
+
+    r = client.post("/api/templates", params={"name": "T-dup"})
+    template_id = r.json()["template_id"]
+    r = client.post("/api/projects", json={"name": "Original", "template_id": template_id})
+    project_id = r.json()["id"]
+
+    r = client.post(
+        f"/api/projects/{project_id}/blueprint",
+        json={"intent": "テスト", "required_sections": [], "mode": "freeform"},
+    )
+    assert r.status_code == 202
+    bp_msg = _json.loads(_FAKE_SQS.messages[-1]["MessageBody"])
+    _bp_worker({"Records": [{"body": _json.dumps(bp_msg)}]}, None)
+
+    r = client.post(f"/api/projects/{project_id}/duplicate")
+    assert r.status_code == 200, r.text
+    new = r.json()
+    assert new["id"] != project_id
+    assert new["name"] == "Original (copy)"
+    assert new["status"] == "draft"
+
+    # The new project gets its own copy of the source's latest blueprint.
+    r = client.get(f"/api/projects/{new['id']}/blueprint")
+    assert r.status_code == 200, r.text
+    bp = r.json()
+    assert bp["version"] == 1
+    assert len(bp["slides"]) == 3  # FAKE_BLUEPRINT_JSON has 3 slides
+
+
+def test_delete_project_cascades(client: TestClient) -> None:
+    import json as _json
+    from api.blueprint_worker import handler as _bp_worker
+
+    r = client.post("/api/templates", params={"name": "T-del"})
+    template_id = r.json()["template_id"]
+    r = client.post("/api/projects", json={"name": "ToDelete", "template_id": template_id})
+    project_id = r.json()["id"]
+
+    # Run a blueprint job so there's a BlueprintRow + BlueprintJobRow to clean up.
+    r = client.post(
+        f"/api/projects/{project_id}/blueprint",
+        json={"intent": "テスト", "required_sections": [], "mode": "freeform"},
+    )
+    bp_msg = _json.loads(_FAKE_SQS.messages[-1]["MessageBody"])
+    _bp_worker({"Records": [{"body": _json.dumps(bp_msg)}]}, None)
+
+    r = client.delete(f"/api/projects/{project_id}")
+    assert r.status_code == 200, r.text
+    assert r.json()["deleted"] == project_id
+
+    # Subsequent reads should 404.
+    r = client.get(f"/api/projects/{project_id}")
+    assert r.status_code == 404
+    r = client.get(f"/api/projects/{project_id}/blueprint")
+    assert r.status_code == 404

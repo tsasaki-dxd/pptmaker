@@ -218,6 +218,41 @@ export default function ProjectsPage() {
     }
   }
 
+  async function handleDeleteProject(p: Project) {
+    if (!window.confirm(`「${p.name}」を削除しますか？レンダリング済みファイルも消えます。`)) return;
+    try {
+      await api.deleteProject(p.id);
+      push(`削除: ${p.name}`);
+      await refresh();
+    } catch (e) {
+      push(`削除失敗: ${String(e)}`);
+    }
+  }
+
+  async function handleDuplicateProject(p: Project) {
+    setBusy(true);
+    setLog([]);
+    try {
+      push(`複製中: ${p.name}`);
+      const copied = await api.duplicateProject(p.id);
+      push(`複製完了: ${copied.id}`);
+
+      // Land in Step 2 with the copied blueprint pre-loaded so the
+      // user can keep editing right where they'd want to.
+      const t = await api.getTemplate(copied.template_id);
+      setSelectedTemplate(t);
+      setProject(copied);
+      const bp = await api.getBlueprint(copied.id);
+      setBlueprint(bp);
+      setStep('reviewing');
+      await refresh();
+    } catch (e) {
+      push(`複製失敗: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // ────────────────────────────────────────────────────────────────────
   // Render
   // ────────────────────────────────────────────────────────────────────
@@ -272,6 +307,9 @@ export default function ProjectsPage() {
         projects={projects}
         onPreview={handlePreview}
         onExport={handleExport}
+        onDuplicate={handleDuplicateProject}
+        onDelete={handleDeleteProject}
+        busy={busy}
       />
     </section>
   );
@@ -531,8 +569,11 @@ function ProjectsList(props: {
   projects: Project[];
   onPreview: (id: string, slide: number) => void;
   onExport: (id: string, format: 'pptx' | 'pdf') => void;
+  onDuplicate: (p: Project) => void;
+  onDelete: (p: Project) => void;
+  busy: boolean;
 }) {
-  const { projects, onPreview, onExport } = props;
+  const { projects, onPreview, onExport, onDuplicate, onDelete, busy } = props;
   return (
     <div>
       <h3 className="mb-2 text-lg font-bold">プロジェクト一覧</h3>
@@ -545,11 +586,31 @@ function ProjectsList(props: {
               key={p.id}
               className="space-y-2 rounded border border-purple-lt/60 bg-white p-3 text-sm"
             >
-              <div>
-                <span className="font-medium text-dark">{p.name}</span>
-                <span className="ml-2 rounded bg-purple-lt/40 px-2 py-0.5 text-xs">{p.status}</span>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div>
+                    <span className="font-medium text-dark">{p.name}</span>
+                    <span className="ml-2 rounded bg-purple-lt/40 px-2 py-0.5 text-xs">{p.status}</span>
+                  </div>
+                  <div className="font-mono text-xs text-muted">{p.id}</div>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <button
+                    onClick={() => onDuplicate(p)}
+                    disabled={busy}
+                    className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20 disabled:opacity-50"
+                  >
+                    複製
+                  </button>
+                  <button
+                    onClick={() => onDelete(p)}
+                    disabled={busy}
+                    className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20 disabled:opacity-50"
+                  >
+                    削除
+                  </button>
+                </div>
               </div>
-              <div className="font-mono text-xs text-muted">{p.id}</div>
               {p.status === 'draft' ? (
                 <div className="text-xs text-muted">未着手</div>
               ) : p.status === 'rendering' ? (

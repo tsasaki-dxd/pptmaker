@@ -12,6 +12,7 @@ from ..auth import require_tenant
 from ..models.db import (
     BlueprintJobRow,
     BlueprintRow,
+    OutputRow,
     ProjectRow,
     RevisionRow,
     TemplateProfileRow,
@@ -77,6 +78,100 @@ def get_project(
         template_id=row.template_id,
         status=row.status,
         created_at=row.created_at,
+    )
+
+
+@router.delete("/{project_id}")
+def delete_project(
+    project_id: str,
+    tenant_id: str = Depends(require_tenant),
+    db: Session = Depends(get_session),
+) -> dict:
+    """Cascade-delete the project's blueprints, revisions, jobs,
+    output rows, and the entire S3 prefix for the project."""
+    row = _load_project(db, project_id, tenant_id)
+
+    # Collect blueprint ids before deleting so we can clean up child
+    # rows by id (no FK ON DELETE CASCADE in the schema).
+    bp_ids = [
+        bp_id
+        for (bp_id,) in db.query(BlueprintRow.id)
+        .filter(BlueprintRow.project_id == project_id)
+        .all()
+    ]
+    if bp_ids:
+        db.query(RevisionRow).filter(RevisionRow.blueprint_id.in_(bp_ids)).delete(
+            synchronize_session=False
+        )
+        db.query(OutputRow).filter(OutputRow.blueprint_id.in_(bp_ids)).delete(
+            synchronize_session=False
+        )
+    db.query(BlueprintJobRow).filter(BlueprintJobRow.project_id == project_id).delete(
+        synchronize_session=False
+    )
+    db.query(BlueprintRow).filter(BlueprintRow.project_id == project_id).delete(
+        synchronize_session=False
+    )
+
+    storage = Storage()
+    deleted_objects = storage.delete_prefix(storage.project_prefix(tenant_id, project_id))
+
+    db.delete(row)
+    db.commit()
+    log.info("project %s deleted (s3 objects removed=%d)", project_id, deleted_objects)
+    return {"deleted": project_id, "s3_objects_deleted": deleted_objects}
+
+
+@router.post("/{project_id}/duplicate", response_model=Project)
+def duplicate_project(
+    project_id: str,
+    tenant_id: str = Depends(require_tenant),
+    db: Session = Depends(get_session),
+) -> Project:
+    """Copy a project and its latest blueprint into a new project that
+    starts at status="draft". Outputs are intentionally not copied —
+    the user is going to edit the blueprint in step 2 anyway, so a
+    fresh render is the right state to land in.
+    """
+    src = _load_project(db, project_id, tenant_id)
+    new_project = ProjectRow(
+        id=str(uuid4()),
+        tenant_id=tenant_id,
+        name=f"{src.name} (copy)",
+        template_id=src.template_id,
+        status="draft",
+    )
+    db.add(new_project)
+    db.flush()  # allocate id before referencing it from the blueprint copy
+
+    latest_bp = (
+        db.query(BlueprintRow)
+        .filter(BlueprintRow.project_id == src.id)
+        .order_by(BlueprintRow.version.desc())
+        .first()
+    )
+    if latest_bp:
+        db.add(
+            BlueprintRow(
+                id=str(uuid4()),
+                project_id=new_project.id,
+                version=1,
+                title=latest_bp.title,
+                # JSON column — pass through directly. Slides keep their
+                # template_slide_index assignments.
+                slides=list(latest_bp.slides),
+            )
+        )
+
+    db.commit()
+    db.refresh(new_project)
+    return Project(
+        id=new_project.id,
+        tenant_id=new_project.tenant_id,
+        name=new_project.name,
+        template_id=new_project.template_id,
+        status=new_project.status,
+        created_at=new_project.created_at,
     )
 
 

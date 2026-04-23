@@ -100,6 +100,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ name, template_id }),
     }),
+  deleteProject: (id: string) =>
+    request<{ deleted: string }>(`/api/projects/${id}`, { method: 'DELETE' }),
+  duplicateProject: (id: string) =>
+    request<Project>(`/api/projects/${id}/duplicate`, { method: 'POST' }),
   createBlueprint: (project_id: string, intent: string, required_sections: string[]) =>
     request<BlueprintJob>(`/api/projects/${project_id}/blueprint`, {
       method: 'POST',
