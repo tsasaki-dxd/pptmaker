@@ -309,7 +309,13 @@ class AppStack(cdk.Stack):
             "ApiFunction",
             function_name=f"slideforge-{stage_name}-api",
             runtime=lambda_.Runtime.PYTHON_3_12,
-            handler="main.handler",
+            # Bundle the source under /asset-output/api/ (keeping the
+            # package name) and load the handler as `api.main.handler`.
+            # If we drop main.py at the root instead, Lambda imports it
+            # as a top-level module, and main.py's `from .config import
+            # ...` relative imports fail with ImportModuleError because
+            # a top-level module has no parent package.
+            handler="api.main.handler",
             code=lambda_.Code.from_asset(
                 str(REPO_ROOT / "app" / "api"),
                 bundling=cdk.BundlingOptions(
@@ -318,7 +324,8 @@ class AppStack(cdk.Stack):
                         "bash",
                         "-c",
                         "pip install --no-cache-dir -r requirements.txt -t /asset-output "
-                        "&& cp -r . /asset-output/",
+                        "&& mkdir -p /asset-output/api "
+                        "&& cp -r . /asset-output/api/",
                     ],
                 ),
             ),
