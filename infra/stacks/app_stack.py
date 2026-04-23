@@ -360,9 +360,23 @@ class AppStack(cdk.Stack):
                 max_age=cdk.Duration.hours(1),
             ),
         )
+        # Explicitly list methods and *exclude* OPTIONS. If OPTIONS is part
+        # of the route (e.g. via HttpMethod.ANY), the explicit route takes
+        # precedence over the API-level cors_preflight above, so preflight
+        # OPTIONS gets forwarded to the Lambda. FastAPI has no OPTIONS
+        # handler (CORSMiddleware is deliberately off), so it 405s and the
+        # browser reports "preflight doesn't have HTTP ok status".
+        # Leaving OPTIONS off lets API Gateway answer preflight directly.
         self.http_api.add_routes(
             path="/{proxy+}",
-            methods=[apigw2.HttpMethod.ANY],
+            methods=[
+                apigw2.HttpMethod.GET,
+                apigw2.HttpMethod.POST,
+                apigw2.HttpMethod.PUT,
+                apigw2.HttpMethod.PATCH,
+                apigw2.HttpMethod.DELETE,
+                apigw2.HttpMethod.HEAD,
+            ],
             integration=apigw2_integ.HttpLambdaIntegration(
                 "ApiIntegration",
                 handler=self.api_function,
