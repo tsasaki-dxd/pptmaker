@@ -240,3 +240,113 @@ def copy_unpacked(src_root: Path, dst_root: Path) -> Path:
         shutil.rmtree(dst_root)
     shutil.copytree(src_root, dst_root)
     return dst_root
+
+
+IMAGE_REL_TYPE = (
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+)
+
+_MIME_TO_EXT = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/webp": "webp",
+}
+
+
+def finalize_media(
+    unpacked_root: Path,
+    registry: object,
+    fetcher: object,
+) -> list[str]:
+    """Materialize image assets from `registry` into the unpacked .pptx tree.
+
+    - Writes bytes to ppt/media/image{N}.{ext} (N = 1-based order of registration).
+    - For each slide in registry.slide_usages, appends <Relationship> entries
+      to ppt/slides/_rels/slide{idx}.xml.rels (creating the file if needed).
+    - Ensures [Content_Types].xml has a <Default Extension="{ext}"
+      ContentType="{mime}"/> for every used extension.
+
+    `registry` must expose `.entries: dict[asset_id, ImageAssetDescriptor]` and
+    `.slide_usages: dict[int, set[str]]`. `fetcher(s3_key)` must return bytes
+    or None if the asset is unavailable (in which case the rel/content-type
+    are still written — the image part is omitted and a warning returned).
+    """
+    warnings: list[str] = []
+
+    asset_ids = list(registry.entries.keys())  # type: ignore[attr-defined]
+    asset_to_part: dict[str, tuple[str, str, str]] = {}
+    used_exts: dict[str, str] = {}
+
+    media_dir = unpacked_root / "ppt" / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+
+    for idx, asset_id in enumerate(asset_ids, start=1):
+        desc = registry.entries[asset_id]  # type: ignore[attr-defined]
+        mime = desc.mime
+        ext = _MIME_TO_EXT.get(mime)
+        if ext is None:
+            warnings.append(f"unsupported mime {mime} for asset {asset_id}")
+            continue
+
+        data = fetcher(desc.s3_key)  # type: ignore[operator]
+        if data is None:
+            warnings.append(f"missing bytes for asset {asset_id} (s3_key={desc.s3_key})")
+        else:
+            (media_dir / f"image{idx}.{ext}").write_bytes(data)
+
+        part_name = f"image{idx}.{ext}"
+        rid = f"rId{10000 + idx - 1}"
+        asset_to_part[asset_id] = (part_name, ext, rid)
+        used_exts[ext] = mime
+
+    rels_dir = unpacked_root / "ppt" / "slides" / "_rels"
+    rels_dir.mkdir(parents=True, exist_ok=True)
+    for slide_idx, rids_used in registry.slide_usages.items():  # type: ignore[attr-defined]
+        rels_path = rels_dir / f"slide{slide_idx}.xml.rels"
+        if rels_path.exists():
+            tree = ET.parse(rels_path)
+            root = tree.getroot()
+        else:
+            root = ET.Element(f"{{{NS['rels']}}}Relationships")
+            tree = ET.ElementTree(root)
+
+        existing_ids = {
+            r.get("Id") for r in root.findall("rels:Relationship", NS)
+        }
+
+        rid_to_asset: dict[str, str] = {}
+        for aid, (_part, _ext, rid) in asset_to_part.items():
+            rid_to_asset[rid] = aid
+
+        for rid in sorted(rids_used):
+            if rid in existing_ids:
+                continue
+            aid = rid_to_asset.get(rid)
+            if aid is None:
+                warnings.append(f"rid {rid} in slide {slide_idx} has no asset mapping")
+                continue
+            part_name, _ext, _rid = asset_to_part[aid]
+            rel = ET.SubElement(root, f"{{{NS['rels']}}}Relationship")
+            rel.set("Id", rid)
+            rel.set("Type", IMAGE_REL_TYPE)
+            rel.set("Target", f"../media/{part_name}")
+
+        tree.write(rels_path, xml_declaration=True, encoding="UTF-8", short_empty_elements=False)
+
+    if used_exts:
+        ct_path = unpacked_root / "[Content_Types].xml"
+        tree = ET.parse(ct_path)
+        root = tree.getroot()
+        existing_defaults = {
+            d.get("Extension") for d in root.findall("ct:Default", NS)
+        }
+        for ext, mime in used_exts.items():
+            if ext in existing_defaults:
+                continue
+            default = ET.SubElement(root, f"{{{NS['ct']}}}Default")
+            default.set("Extension", ext)
+            default.set("ContentType", mime)
+        tree.write(ct_path, xml_declaration=True, encoding="UTF-8", short_empty_elements=False)
+
+    return warnings

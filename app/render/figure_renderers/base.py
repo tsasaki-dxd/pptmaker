@@ -8,9 +8,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..shapes import Palette
+
+if TYPE_CHECKING:
+    from ..media import MediaRegistry
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,8 @@ class RenderContext:
     palette: Palette
     font: str
     next_shape_id: int
+    media: MediaRegistry | None = None
+    slide_index: int | None = None
 
 
 @dataclass
