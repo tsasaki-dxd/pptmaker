@@ -14,7 +14,8 @@ from dataclasses import dataclass
 
 from .figure_renderers import renderer_for
 from .figure_renderers.base import EMUBox, RenderContext
-from .shapes import DEFAULT_FONT, DEFAULT_PALETTE, Palette, inch
+from .shapes import DEFAULT_FONT, DEFAULT_PALETTE, Palette, inch, palette_from_theme
+from .theme_loader import ThemeParseError, load_theme
 
 DEFAULT_BODY_AREA = EMUBox(x=inch(0.5), y=inch(1.6), w=inch(12.3), h=inch(5.4))
 
@@ -23,6 +24,25 @@ _logger = logging.getLogger(__name__)
 
 def _slot_render_enabled() -> bool:
     return os.environ.get("FF_SLOT_RENDER", "0") == "1"
+
+
+def _theme_inheritance_enabled() -> bool:
+    return os.environ.get("FF_THEME_INHERITANCE", "0") == "1"
+
+
+def _resolve_palette(palette: Palette, theme_pptx_bytes: bytes | None) -> Palette:
+    if not _theme_inheritance_enabled() or theme_pptx_bytes is None:
+        return palette
+    try:
+        theme = load_theme(theme_pptx_bytes)
+        return palette_from_theme(theme)
+    except (ThemeParseError, Exception) as e:
+        _logger.warning(
+            "FF_THEME_INHERITANCE enabled but theme load failed (%s); "
+            "falling back to provided palette",
+            e,
+        )
+        return palette
 
 
 def _pick_figure_slot(slots: list[dict]) -> dict | None:
@@ -60,6 +80,7 @@ def render_content_slide(
     font: str = DEFAULT_FONT,
     start_shape_id: int = 1000,
     slots: list[dict] | None = None,
+    theme_pptx_bytes: bytes | None = None,
 ) -> str:
     """Return updated slide XML with:
       1. Title placeholder text replaced.
@@ -85,7 +106,8 @@ def render_content_slide(
         vr = renderer.validate(req.content)
         if not vr.ok:
             raise ValueError(f"invalid content for {req.figure_type}: {vr.errors}")
-        ctx = RenderContext(palette=palette, font=font, next_shape_id=start_shape_id)
+        effective_palette = _resolve_palette(palette, theme_pptx_bytes)
+        ctx = RenderContext(palette=effective_palette, font=font, next_shape_id=start_shape_id)
         container = req.body_area
         if _slot_render_enabled() and slots:
             figure_slot = _pick_figure_slot(slots)
