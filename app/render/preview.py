@@ -8,6 +8,16 @@ from pathlib import Path
 
 log = logging.getLogger("slideforge.render.preview")
 
+# Lambda's $HOME is on a read-only filesystem, so LibreOffice's default
+# user-profile path (~/.config/libreoffice) can't be created and it
+# exits with:
+#   Fatal Error: The application cannot be started.
+#   User installation could not be completed.
+# Redirect the profile to /tmp (writable). Kept at a stable location
+# so a warm container reuses the profile instead of reinitialising on
+# every render.
+_LO_PROFILE_DIR = "file:///tmp/lo-profile"
+
 
 def _run(cmd: list[str]) -> None:
     """subprocess.run with check=True, but surface stdout/stderr in the
@@ -33,6 +43,7 @@ def pptx_to_pdf(pptx_path: Path, out_dir: Path) -> Path:
         [
             "soffice",
             "--headless",
+            f"-env:UserInstallation={_LO_PROFILE_DIR}",
             "--convert-to",
             "pdf",
             "--outdir",

@@ -17,7 +17,7 @@ from typing import Literal
 
 log = logging.getLogger("slideforge.render.db_status")
 
-ProjectStatus = Literal["complete", "failed"]
+ProjectStatus = Literal["complete", "partial", "failed"]
 
 
 def update_project_status(project_id: str, status: ProjectStatus) -> None:
