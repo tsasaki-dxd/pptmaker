@@ -160,7 +160,11 @@ export default function ProjectsPage() {
       if (status === 'failed') {
         throw new Error('レンダリング失敗 (詳細は CloudWatch ログ参照)');
       }
-      push('完了!');
+      if (status === 'partial') {
+        push('部分的に完了: .pptx は生成できたが preview/PDF はエラー');
+      } else {
+        push('完了!');
+      }
       setStep('done');
       await refresh();
     } catch (e) {
@@ -172,14 +176,18 @@ export default function ProjectsPage() {
     }
   }
 
-  async function pollRenderComplete(projectId: string): Promise<'complete' | 'failed'> {
+  async function pollRenderComplete(
+    projectId: string,
+  ): Promise<'complete' | 'partial' | 'failed'> {
     const intervalMs = 3000;
     const maxAttempts = 100;
     const startedAt = Date.now();
     for (let i = 0; i < maxAttempts; i++) {
       const p = await api.getProject(projectId);
       const elapsed = Math.round((Date.now() - startedAt) / 1000);
-      if (p.status === 'complete' || p.status === 'failed') return p.status;
+      if (p.status === 'complete' || p.status === 'partial' || p.status === 'failed') {
+        return p.status;
+      }
       if (i > 0 && i % 5 === 0) {
         setLog((prev) => [
           ...prev.slice(0, -1),
@@ -628,6 +636,18 @@ function ProjectsList(props: {
                 <div className="text-xs text-muted">レンダリング中...</div>
               ) : p.status === 'failed' ? (
                 <div className="text-xs text-red-600">レンダリング失敗</div>
+              ) : p.status === 'partial' ? (
+                <div className="space-y-1">
+                  <div className="text-xs text-amber-700">
+                    .pptx は出力済み (プレビュー / PDF はエラー)
+                  </div>
+                  <button
+                    onClick={() => onExport(p.id, 'pptx')}
+                    className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20"
+                  >
+                    .pptx
+                  </button>
+                </div>
               ) : (
                 <div className="flex gap-2">
                   <button

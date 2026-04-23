@@ -78,14 +78,25 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
 
 def _run(job: RenderJob) -> dict[str, Any]:
     """Wrap _process_job with project status write-back so the UI can
-    poll ProjectRow.status to know when the deck is actually ready."""
+    poll ProjectRow.status to know when the deck is actually ready.
+
+    Status values:
+      - complete: pptx, pdf, and slide previews all in S3
+      - partial:  pptx uploaded but the pdf/preview step failed
+                  (usually LibreOffice). User can still download the
+                  pptx; preview / .pdf buttons won't work.
+      - failed:   didn't even get to a pptx upload
+    """
     try:
         result = _process_job(job)
-        update_project_status(job.project_id, "complete")
-        return result
     except Exception:
         update_project_status(job.project_id, "failed")
         raise
+    if result.get("preview_error"):
+        update_project_status(job.project_id, "partial")
+    else:
+        update_project_status(job.project_id, "complete")
+    return result
 
 
 def _parse_job(payload: dict[str, Any]) -> RenderJob:
@@ -168,6 +179,7 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
         # "export as PDF" button) and per-slide JPEGs for the previews.
         pdf_key: str | None = None
         preview_keys: list[str] = []
+        preview_error: str | None = None
         try:
             pdf_path = pptx_to_pdf(out_pptx, work / "preview")
             pdf_key = f"{job.out_prefix.rstrip('/')}/output.pdf"
@@ -178,8 +190,12 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
                 key = f"{job.out_prefix.rstrip('/')}/preview/slide-{idx:02d}.jpg"
                 _upload(jpg, key)
                 preview_keys.append(key)
-        except Exception:
+        except Exception as e:
+            # Keep the pptx upload (it's already in S3 and usable), but
+            # record the failure so _run() can set project.status to
+            # "partial" instead of lying about full success.
             log.exception("pdf/preview generation failed for job=%s", job.job_id)
+            preview_error = str(e)
 
         return {
             "job_id": job.job_id,
@@ -189,6 +205,7 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
             "slide_count": len(xmls),
             "template_pages_used": chosen,
             "skipped_slides": skipped,
+            "preview_error": preview_error,
         }
 
 
