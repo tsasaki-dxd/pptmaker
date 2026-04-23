@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 
 import boto3
+from botocore.client import Config
 
 from ..config import get_settings
 
@@ -22,7 +23,18 @@ class PresignedUpload:
 class Storage:
     def __init__(self) -> None:
         self.settings = get_settings()
-        self.s3 = boto3.client("s3", region_name=self.settings.aws_region)
+        # Force SigV4. The artifacts bucket is KMS-encrypted with a CMK,
+        # and S3 rejects presigned PUTs signed with SigV2 against
+        # KMS-SSE buckets:
+        #   InvalidArgument: Requests specifying Server Side Encryption
+        #   with AWS KMS managed keys require AWS Signature Version 4.
+        # boto3's default signature version for presigned URLs varies by
+        # region/version, so pin it here.
+        self.s3 = boto3.client(
+            "s3",
+            region_name=self.settings.aws_region,
+            config=Config(signature_version="s3v4"),
+        )
         self.bucket = self.settings.s3_bucket
 
     def presign_upload(self, key: str, expires: int = 900, content_type: str | None = None) -> PresignedUpload:
