@@ -11,7 +11,7 @@ def test_sanitize_coerces_invalid_figure_type() -> None:
     obj = {
         "title": "t",
         "slides": [
-            {"index": 1, "layout": "content", "figure_type": "process_flow", "content": {"title": "x"}},
+            {"index": 1, "layout": "content", "figure_type": "executive_pyramid_xyz", "content": {"title": "x"}},
         ],
     }
     _sanitize(obj)
@@ -64,7 +64,9 @@ def test_sanitize_coerces_non_dict_content() -> None:
         "slides": [{"index": 1, "layout": "content", "content": "oops not a dict"}],
     }
     _sanitize(obj)
-    assert obj["slides"][0]["content"] == {}
+    # Post-phase2 the slot sanitizer adds an empty "slots" dict alongside.
+    assert isinstance(obj["slides"][0]["content"], dict)
+    assert obj["slides"][0]["content"].get("slots", {}) == {}
     _validate(obj)
 
 

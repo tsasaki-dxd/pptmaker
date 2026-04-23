@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -13,6 +13,9 @@ from .registry import register
 class BulletListRenderer(FigureRenderer):
     figure_type = "bullet_list"
     description = "Vertical bullet list. content: {items: [str | {text, sub?}]}"
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "items": ["要点1", "要点2", {"text": "要点3", "sub": "補足"}],
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         items = content.get("items")

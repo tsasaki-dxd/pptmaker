@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import rect_outline, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -16,6 +16,13 @@ class CardsGridRenderer(FigureRenderer):
         "Grid of uniform cards with title + body. "
         "content: {cards: [{title, body}], columns?: int (default 3)}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "cards": [
+            {"title": "カード1", "body": "説明文"},
+            {"title": "カード2", "body": "説明文"},
+        ],
+        "columns": 3,
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         cards = content.get("cards")

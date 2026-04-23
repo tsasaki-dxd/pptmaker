@@ -49,3 +49,6 @@ build/
 # Local PoC output
 poc_bundle/
 template_unpacked/
+
+# Claude Code agent scratch (worktrees, transcripts)
+.claude/

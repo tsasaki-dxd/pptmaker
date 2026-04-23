@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import rect_outline, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -16,6 +16,10 @@ class TwoColumnRenderer(FigureRenderer):
         "Left / right columns with optional bottom box. "
         "content: {left: {title, body}, right: {title, body}, footer?: {title, body}}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "left": {"title": "左タイトル", "body": "左本文"},
+        "right": {"title": "右タイトル", "body": "右本文"},
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         for side in ("left", "right"):

@@ -8,9 +8,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from ..shapes import Palette
+
+if TYPE_CHECKING:
+    from ..media import MediaRegistry
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,8 @@ class RenderContext:
     palette: Palette
     font: str
     next_shape_id: int
+    media: MediaRegistry | None = None
+    slide_index: int | None = None
 
 
 @dataclass
@@ -52,6 +57,7 @@ class FigureRenderer(ABC):
 
     figure_type: str = ""
     description: str = ""
+    input_schema_example: ClassVar[dict[str, Any]] = {}
 
     @abstractmethod
     def validate(self, content: dict[str, Any]) -> ValidationResult: ...
@@ -69,4 +75,5 @@ class FigureRenderer(ABC):
         return {
             "figure_type": self.figure_type,
             "description": self.description,
+            "input_schema_example": self.input_schema_example,
         }

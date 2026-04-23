@@ -96,6 +96,10 @@ def get_template(
             row.template_slide_count = analysis.slide_count
             if analysis.layouts:
                 row.layouts = analysis.layouts
+            if analysis.design_tokens:
+                merged = dict(row.design_tokens or {})
+                merged.update(analysis.design_tokens)
+                row.design_tokens = merged
             db.commit()
     return _to_profile(row)
 

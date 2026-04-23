@@ -78,6 +78,29 @@ class OutputRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ImageAssetRow(Base):
+    """User-uploaded image referenced by one or more slides.
+
+    Created by POST /api/projects/{id}/images (returns presigned POST),
+    then marked committed by POST /images/{asset_id}/commit once the
+    client has uploaded and computed the SHA-256. The render pipeline
+    embeds committed assets into the output .pptx.
+    """
+
+    __tablename__ = "image_assets"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), index=True)
+    s3_key: Mapped[str] = mapped_column(String(500), unique=True)
+    mime: Mapped[str] = mapped_column(String(50))
+    bytes: Mapped[int] = mapped_column(Integer)
+    width_px: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height_px: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    uploaded_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class BlueprintJobRow(Base):
     """Async blueprint-generation job.
 

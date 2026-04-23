@@ -17,6 +17,7 @@ from typing import Any
 from anthropic import Anthropic
 
 from ..config import get_settings
+from ..prompts.builder import build_blueprint_system_prompt
 
 log = logging.getLogger("slideforge.llm")
 
@@ -25,6 +26,20 @@ PROMPTS_DIR = Path(__file__).resolve().parents[1] / "prompts"
 
 def _load(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8")
+
+
+def _load_blueprint_system() -> str:
+    """Resolve the blueprint system prompt.
+
+    Phase 2 §5.3: behind FF_DYNAMIC_PROMPT_CATALOG, the figure_type catalog
+    is injected from the renderer registry via `build_blueprint_system_prompt`.
+    Default (flag off or unset) falls through to the legacy static file so we
+    keep a safe rollback path.
+    """
+    flag = os.environ.get("FF_DYNAMIC_PROMPT_CATALOG", "").strip().lower()
+    if flag in {"1", "true", "yes", "on"}:
+        return build_blueprint_system_prompt()
+    return _load("blueprint_system.txt")
 
 
 @dataclass
@@ -89,7 +104,7 @@ class LLMClient:
         system_blocks = [
             {
                 "type": "text",
-                "text": _load("blueprint_system.txt"),
+                "text": _load_blueprint_system(),
                 "cache_control": {"type": "ephemeral"},
             },
             {
