@@ -27,7 +27,12 @@ WORKDIR /var/task
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . ./
+# Copy the source into a `render/` package, not flat into /var/task,
+# so handler.py's `from .layout_renderer import ...` relative imports
+# resolve. A flat layout makes Lambda import handler as a top-level
+# module, which has no parent package, and every invocation dies with
+# Runtime.ImportModuleError.
+COPY . ./render/
 
 ENV PYTHONPATH=/var/task
 ENV LOG_LEVEL=INFO
@@ -35,4 +40,4 @@ ENV LOG_LEVEL=INFO
 # Standard Lambda container entrypoint for custom base images:
 # awslambdaric consumes the handler spec passed as CMD.
 ENTRYPOINT ["/usr/local/bin/python", "-m", "awslambdaric"]
-CMD ["handler.handler"]
+CMD ["render.handler.handler"]
