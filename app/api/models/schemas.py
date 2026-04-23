@@ -29,6 +29,11 @@ FigureType = Literal[
     "pull_quote",
     "icon_list",
     "process_flow",
+    "gantt",
+    "stack_bar",
+    "waterfall",
+    "cost_breakdown",
+    "image_slot",
 ]
 
 
