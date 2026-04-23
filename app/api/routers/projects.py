@@ -33,7 +33,8 @@ from ..models.schemas import (
 from ..services.llm import LLMClient
 from ..services.queue import BlueprintQueue, RenderQueue
 from ..services.revision_handler import RevisionError, apply_instruction
-from ..services.storage import Storage
+from ..services.storage import Storage, download_bytes
+from ..services.template_registry import ensure_slots_populated
 
 log = logging.getLogger("slideforge.projects")
 
@@ -416,6 +417,8 @@ def render(
         .one()
     )
 
+    _migrate_template_slots_if_needed(db, template)
+
     storage = Storage()
     out_prefix = storage.output_prefix(tenant_id, project.id, bp.version)
 
@@ -546,3 +549,65 @@ def _to_schema(row: BlueprintRow) -> Blueprint:
         slides=[SlideSpec(**s) for s in row.slides],
         created_at=row.created_at,
     )
+
+
+def _migrate_template_slots_if_needed(
+    db: Session,
+    template: TemplateProfileRow,
+) -> None:
+    """Lazy-migrate a pre-Phase-2 TemplateProfile row before a render (Phase 2 §11).
+
+    Fast path: if every layout already has slot metadata, ``ensure_slots_populated``
+    returns the same Pydantic profile instance and we skip the DB write.
+    Slow path: fetch the .pptx, re-extract slots per layout, persist the new JSON.
+    Any failure is swallowed as a WARNING so the render still proceeds with the
+    original profile.
+    """
+    try:
+        from ..models.schemas import TemplateProfile
+    except Exception:
+        log.exception("slot migration: schemas import failed; skipping")
+        return
+
+    try:
+        profile = TemplateProfile(
+            id=template.id,
+            tenant_id=template.tenant_id,
+            name=template.name,
+            original_s3_path=template.original_s3_path,
+            design_tokens=template.design_tokens or {},
+            layouts=template.layouts or [],
+            template_slide_count=template.template_slide_count or 0,
+            created_at=template.created_at,
+        )
+    except Exception:
+        log.warning(
+            "slot migration: cannot hydrate TemplateProfile for %s; skipping",
+            template.id,
+            exc_info=True,
+        )
+        return
+
+    try:
+        migrated = ensure_slots_populated(profile, pptx_fetcher=download_bytes)
+    except Exception:
+        log.warning(
+            "slot migration: ensure_slots_populated raised for %s; proceeding with original",
+            template.id,
+            exc_info=True,
+        )
+        return
+
+    if migrated is profile:
+        return
+
+    try:
+        template.layouts = list(migrated.layouts)
+        db.commit()
+    except Exception:
+        log.warning(
+            "slot migration: DB commit failed for %s; proceeding with original",
+            template.id,
+            exc_info=True,
+        )
+        db.rollback()
