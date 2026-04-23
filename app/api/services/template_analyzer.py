@@ -1,23 +1,35 @@
 """
 Lightweight .pptx introspection for the API Lambda.
 
-Now does two things: counts slides (so the UI dropdown has the right
-number of options) and runs the rule-based layout classifier from
+Now does three things: counts slides (so the UI dropdown has the right
+number of options), runs the rule-based layout classifier from
 template_registry so default blueprint → template page mapping can
-match by type instead of blindly cycling.
+match by type instead of blindly cycling, and extracts per-slide slot
+metadata (Phase 2 design §4.2) so downstream blueprint generation can
+reason about placeholders without re-parsing the .pptx.
 """
 
 from __future__ import annotations
 
 import io
 import logging
+import re
 import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import boto3
+
+from render.slot_extractor import (
+    EMURect,
+    FixedElement,
+    Slot,
+    SlotExtractionError,
+    extract_slots,
+)
 
 from .template_registry import classify_layouts
 
@@ -27,7 +39,8 @@ log = logging.getLogger("slideforge.template_analyzer")
 @dataclass
 class TemplateAnalysis:
     slide_count: int
-    # [{"index": 1, "layout": "cover", "confidence": 0.95, "reason": "..."}, ...]
+    # [{"index": 1, "layout": "cover", "confidence": 0.95, "reason": "...",
+    #   "slots": [...], "fixed_elements": [...]}, ...]
     layouts: list[dict]
 
 
@@ -45,8 +58,59 @@ def _fetch_pptx(s3_uri: str) -> bytes | None:
         return None
 
 
+def _rect_to_dict(rect: EMURect | None) -> dict[str, int] | None:
+    if rect is None:
+        return None
+    return {"x": rect.x, "y": rect.y, "cx": rect.cx, "cy": rect.cy}
+
+
+def _slot_to_dict(slot: Slot) -> dict[str, Any]:
+    return {
+        "id": slot.id,
+        "kind": slot.kind,
+        "rect": _rect_to_dict(slot.rect),
+        "role": slot.role,
+        "idx": slot.idx,
+    }
+
+
+def _fixed_to_dict(fixed: FixedElement) -> dict[str, Any]:
+    return {
+        "rect": _rect_to_dict(fixed.rect),
+        "element_type": fixed.element_type,
+    }
+
+
+def _extract_slot_metadata(body: bytes) -> dict[int, dict[str, list[dict[str, Any]]]]:
+    """Map slide_index (1-based) -> {"slots": [...], "fixed_elements": [...]}.
+
+    A per-slide SlotExtractionError is logged and replaced with empty lists;
+    it does not abort the whole template.
+    """
+    meta: dict[int, dict[str, list[dict[str, Any]]]] = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(body)) as zf:
+            slide_names = sorted(
+                n for n in zf.namelist() if re.match(r"ppt/slides/slide\d+\.xml$", n)
+            )
+            for idx, name in enumerate(slide_names, start=1):
+                slide_xml = zf.read(name)
+                try:
+                    result = extract_slots(slide_xml)
+                    meta[idx] = {
+                        "slots": [_slot_to_dict(s) for s in result.slots],
+                        "fixed_elements": [_fixed_to_dict(f) for f in result.fixed],
+                    }
+                except SlotExtractionError as e:
+                    log.warning("slot extraction failed for %s: %s", name, e)
+                    meta[idx] = {"slots": [], "fixed_elements": []}
+    except Exception:
+        log.exception("could not walk pptx for slot extraction")
+    return meta
+
+
 def analyze_template(s3_uri: str) -> TemplateAnalysis | None:
-    """Download + count + classify. Returns None if the fetch fails."""
+    """Download + count + classify + extract slots. Returns None if the fetch fails."""
     body = _fetch_pptx(s3_uri)
     if body is None:
         return None
@@ -64,6 +128,8 @@ def analyze_template(s3_uri: str) -> TemplateAnalysis | None:
         log.exception("could not parse pptx zip from %s", s3_uri)
         return None
 
+    slot_meta = _extract_slot_metadata(body)
+
     # classify_layouts walks the zip itself — simplest to give it a
     # file on disk. The .pptx is small (KB range).
     layouts: list[dict] = []
@@ -72,12 +138,15 @@ def analyze_template(s3_uri: str) -> TemplateAnalysis | None:
             tmp.write(body)
             tmp.flush()
             for c in classify_layouts(Path(tmp.name)):
+                entry = slot_meta.get(c.slide_index, {"slots": [], "fixed_elements": []})
                 layouts.append(
                     {
                         "index": c.slide_index,
                         "layout": c.layout,
                         "confidence": c.confidence,
                         "reason": c.reason,
+                        "slots": entry["slots"],
+                        "fixed_elements": entry["fixed_elements"],
                     }
                 )
     except Exception:
