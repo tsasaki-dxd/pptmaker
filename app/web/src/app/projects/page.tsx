@@ -76,10 +76,18 @@ export default function ProjectsPage() {
     // while leaving room for slow LLM traffic.
     const intervalMs = 2000;
     const maxAttempts = 90;
+    const startedAt = Date.now();
     for (let i = 0; i < maxAttempts; i++) {
       const j = await api.getBlueprintJob(projectId, jobId);
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
       if (j.status === 'complete' || j.status === 'failed') {
         return { status: j.status, blueprint_id: j.blueprint_id, error: j.error };
+      }
+      // Rewrite the last log line so the user sees live progress instead
+      // of a growing stream of "polling..." lines. Every 10s to avoid
+      // churn.
+      if (i > 0 && i % 5 === 0) {
+        setLog((prev) => [...prev.slice(0, -1), `骨格生成 polling... (${elapsed}s / 180s)`]);
       }
       await new Promise((r) => setTimeout(r, intervalMs));
     }

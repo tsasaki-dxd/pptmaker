@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from ..models.schemas import SlideSpec
-from .llm import LLMClient, extract_json
+from .llm import LLMClient, LLMTruncatedError, extract_json
 
 log = logging.getLogger("slideforge.blueprint")
 
@@ -63,6 +63,11 @@ def build_blueprint(
             _validate(parsed)
             log.info("blueprint generated attempt=%d usage=%s", attempt, result.usage)
             return parsed
+        except LLMTruncatedError as e:
+            # Retrying won't help — max_tokens is the limit, a second
+            # identical call will hit it again. Fail immediately.
+            log.error("blueprint attempt=%d truncated: %s", attempt, e)
+            raise BlueprintBuildError(str(e)) from e
         except Exception as e:
             log.warning("blueprint attempt=%d failed: %s", attempt, e)
             last_error = e
