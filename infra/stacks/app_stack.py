@@ -469,12 +469,12 @@ class AppStack(cdk.Stack):
             integration=apigw2_integ.HttpLambdaIntegration(
                 "ApiIntegration",
                 handler=self.api_function,
-                # Blueprint generation does a synchronous LLM call that
-                # routinely takes ~30s. The default integration timeout
-                # on HTTP API v2 is 29s, which returns 503 to the client.
-                # 30s is the hard ceiling AWS allows for HTTP APIs —
-                # anything longer would need an async job pattern.
-                timeout=cdk.Duration.seconds(30),
+                # 29s is the CDK-enforced upper bound (AWS docs say the
+                # hard ceiling is 30s, but CDK validates <= 29s on
+                # synth). Bumped from the default because some requests
+                # still run close to the limit; anything longer moved
+                # to the async blueprint worker pattern.
+                timeout=cdk.Duration.seconds(29),
             ),
         )
 
