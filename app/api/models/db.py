@@ -8,7 +8,7 @@ from uuid import uuid4
 from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, sessionmaker
 
-from ..config import get_settings
+from ..config import get_db_url
 
 
 class Base(DeclarativeBase):
@@ -82,8 +82,7 @@ _SessionLocal = None
 def get_engine():
     global _engine, _SessionLocal
     if _engine is None:
-        settings = get_settings()
-        _engine = create_engine(settings.db_url, pool_pre_ping=True)
+        _engine = create_engine(get_db_url(), pool_pre_ping=True)
         _SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
     return _engine
 

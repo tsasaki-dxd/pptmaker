@@ -17,7 +17,6 @@ class Settings:
     env: str
     aws_region: str
     s3_bucket: str
-    db_url: str
     render_queue_url: str
     cognito_user_pool_id: str
     cognito_client_id: str
@@ -28,44 +27,57 @@ class Settings:
     log_level: str
 
 
-def _resolve_db_url() -> str:
-    """Compose the SQLAlchemy DB URL.
+_cached_db_url: str | None = None
+
+
+def get_db_url() -> str:
+    """Compose the SQLAlchemy DB URL. Lazy — only called on first DB access.
 
     Priority:
       1. DB_URL env var wins (local dev, explicit override).
       2. DB_SECRET_ARN + DB_ENDPOINT -> fetch the RDS credentials secret
          from Secrets Manager and build a postgres URL.
       3. Fallback to a local SQLite path (useful for unit tests).
+
+    Deliberately kept OUT of `Settings` because a Secrets Manager call
+    at Lambda cold-start import time (i.e. before the VPC ENI has
+    stabilised / NAT route is ready) used to crash the whole module
+    load, which then made even the OPTIONS preflight fail without CORS
+    headers. Calling this lazily means OPTIONS can succeed before the
+    DB link is ready.
     """
+    global _cached_db_url
+    if _cached_db_url is not None:
+        return _cached_db_url
+
     override = os.environ.get("DB_URL")
     if override:
+        _cached_db_url = override
         return override
 
     secret_arn = os.environ.get("DB_SECRET_ARN")
     endpoint = os.environ.get("DB_ENDPOINT")
     if secret_arn and endpoint:
-        try:
-            import boto3  # lazy import so unit tests without AWS still work
+        import boto3  # lazy import so unit tests without AWS still work
 
-            sm = boto3.client(
-                "secretsmanager",
-                region_name=os.environ.get("AWS_REGION", "ap-northeast-1"),
-            )
-            value = sm.get_secret_value(SecretId=secret_arn)
-            creds = json.loads(value["SecretString"])
-            user = creds["username"]
-            pwd = creds["password"]
-            db_name = creds.get("dbname", "postgres")
-            port = creds.get("port", 5432)
-            return (
-                f"postgresql+psycopg2://{user}:{quote_plus(pwd)}"
-                f"@{endpoint}:{port}/{db_name}"
-            )
-        except Exception as e:
-            log.error("failed to resolve RDS secret: %s", e)
-            raise
+        sm = boto3.client(
+            "secretsmanager",
+            region_name=os.environ.get("AWS_REGION", "ap-northeast-1"),
+        )
+        value = sm.get_secret_value(SecretId=secret_arn)
+        creds = json.loads(value["SecretString"])
+        user = creds["username"]
+        pwd = creds["password"]
+        db_name = creds.get("dbname", "postgres")
+        port = creds.get("port", 5432)
+        _cached_db_url = (
+            f"postgresql+psycopg2://{user}:{quote_plus(pwd)}"
+            f"@{endpoint}:{port}/{db_name}"
+        )
+        return _cached_db_url
 
-    return "sqlite:///./slideforge-local.db"
+    _cached_db_url = "sqlite:///./slideforge-local.db"
+    return _cached_db_url
 
 
 @lru_cache(maxsize=1)
@@ -74,7 +86,6 @@ def get_settings() -> Settings:
         env=os.environ.get("ENV", "dev"),
         aws_region=os.environ.get("AWS_REGION", "ap-northeast-1"),
         s3_bucket=os.environ.get("S3_BUCKET", "slideforge-local"),
-        db_url=_resolve_db_url(),
         render_queue_url=os.environ.get("RENDER_QUEUE_URL", ""),
         cognito_user_pool_id=os.environ.get("COGNITO_USER_POOL_ID", ""),
         cognito_client_id=os.environ.get("COGNITO_CLIENT_ID", ""),
@@ -84,3 +95,4 @@ def get_settings() -> Settings:
         anthropic_api_key_secret=os.environ.get("ANTHROPIC_API_KEY_SECRET", "slideforge/anthropic"),
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
     )
+

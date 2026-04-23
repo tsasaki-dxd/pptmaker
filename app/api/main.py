@@ -8,7 +8,6 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from mangum import Mangum
 
 from .config import get_settings
@@ -20,14 +19,11 @@ logging.basicConfig(
     format='{"ts":"%(asctime)s","level":"%(levelname)s","name":"%(name)s","msg":"%(message)s"}',
 )
 
+# CORS is handled entirely by API Gateway (see infra/stacks/app_stack.py
+# HttpApi cors_preflight). Not enabling FastAPI's CORSMiddleware — doing
+# so would double up `Access-Control-Allow-Origin` headers on responses,
+# which browsers reject.
 app = FastAPI(title="SlideForge API", version="0.1.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Phase 1 内部利用。Phase 2 で絞る
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 app.include_router(templates.router)
 app.include_router(projects.router)
