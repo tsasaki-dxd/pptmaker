@@ -77,6 +77,7 @@ class OutputRow(Base):
 
 _engine = None
 _SessionLocal = None
+_tables_ready = False
 
 
 def get_engine():
@@ -87,8 +88,22 @@ def get_engine():
     return _engine
 
 
+def _ensure_tables() -> None:
+    # Create tables lazily on first DB access instead of at Mangum startup.
+    # Startup-time failures used to be swallowed (main.py), leaving the
+    # Lambda serving every query against a DB with no tables and 500-ing
+    # with "relation does not exist". Running this inline means a DB/SM
+    # outage surfaces on the request that triggered it, with a real
+    # traceback.
+    global _tables_ready
+    if _tables_ready:
+        return
+    Base.metadata.create_all(get_engine())
+    _tables_ready = True
+
+
 def get_session():
-    get_engine()
+    _ensure_tables()
     assert _SessionLocal is not None
     db = _SessionLocal()
     try:
@@ -98,4 +113,4 @@ def get_session():
 
 
 def init_db() -> None:
-    Base.metadata.create_all(get_engine())
+    _ensure_tables()
