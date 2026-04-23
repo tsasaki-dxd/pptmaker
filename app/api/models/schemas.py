@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 LayoutKind = Literal["cover", "toc", "section_divider", "content", "about", "disclaimer"]
 
@@ -65,6 +65,22 @@ class SlideSpec(BaseModel):
     # uses this to copy the chosen template page's XML and overlay
     # blueprint content.
     template_slide_index: int | None = Field(default=None, ge=1)
+    # Phase 2 scaffold (§4.4/§5.5): one-sentence conclusion shown as the
+    # slide's headline. Optional now; becomes required in Phase 2.2.
+    headline_message: str | None = Field(default=None, max_length=200)
+
+    @field_validator("headline_message")
+    @classmethod
+    def _validate_headline_message(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        s = v.strip()
+        if not s:
+            raise ValueError("headline_message must not be blank if provided")
+        # §3.2 rule: must be a complete sentence ending with sentence punctuation (half or full width).
+        if not s.endswith(("。", "！", "？", ".", "!", "?")):
+            raise ValueError("headline_message must end with sentence punctuation (。！？.!?)")
+        return s
 
 
 class Blueprint(BaseModel):
