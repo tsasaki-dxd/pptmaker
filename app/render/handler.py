@@ -99,8 +99,26 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
 
         unpacked = safe_unpack(tpl_local, work / "unpacked")
 
+        # The current renderer maps blueprint slide N -> template slide N
+        # 1:1. We don't yet duplicate template slides to grow the deck,
+        # so any blueprint slide past the template's actual slide count
+        # has nothing to render into. Truncate up front instead of
+        # logging FileNotFoundError per slide and leaving the rest of
+        # the deck empty.
+        template_slide_count = len(
+            list((unpacked.root / "ppt" / "slides").glob("slide*.xml"))
+        )
+        all_slides = job.blueprint.get("slides", [])
+        slides = all_slides[:template_slide_count]
+        if len(all_slides) > template_slide_count:
+            log.warning(
+                "blueprint has %d slides but template has only %d; truncating",
+                len(all_slides),
+                template_slide_count,
+            )
+
         skipped: list[int] = []
-        for i, slide in enumerate(job.blueprint.get("slides", []), start=1):
+        for i, slide in enumerate(slides, start=1):
             req = RenderRequest(
                 slide_index=i,
                 layout=slide.get("layout", "content"),
@@ -150,7 +168,8 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
             "pptx": pptx_key,
             "pdf": pdf_key,
             "previews": preview_keys,
-            "slide_count": len(job.blueprint.get("slides", [])),
+            "slide_count": len(slides),
+            "blueprint_slide_count": len(all_slides),
             "skipped_slides": skipped,
         }
 

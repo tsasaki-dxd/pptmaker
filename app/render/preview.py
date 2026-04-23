@@ -2,13 +2,34 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
+
+log = logging.getLogger("slideforge.render.preview")
+
+
+def _run(cmd: list[str]) -> None:
+    """subprocess.run with check=True, but surface stdout/stderr in the
+    CalledProcessError message. The default CalledProcessError str() only
+    shows the return code, which makes "soffice failed" log lines
+    completely useless for diagnosis."""
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        log.error(
+            "command failed: %s\n--- stdout ---\n%s\n--- stderr ---\n%s",
+            " ".join(cmd),
+            proc.stdout,
+            proc.stderr,
+        )
+        raise subprocess.CalledProcessError(
+            proc.returncode, cmd, output=proc.stdout, stderr=proc.stderr
+        )
 
 
 def pptx_to_pdf(pptx_path: Path, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
+    _run(
         [
             "soffice",
             "--headless",
@@ -17,9 +38,7 @@ def pptx_to_pdf(pptx_path: Path, out_dir: Path) -> Path:
             "--outdir",
             str(out_dir),
             str(pptx_path),
-        ],
-        check=True,
-        capture_output=True,
+        ]
     )
     return out_dir / (pptx_path.stem + ".pdf")
 
@@ -27,7 +46,7 @@ def pptx_to_pdf(pptx_path: Path, out_dir: Path) -> Path:
 def pdf_to_jpegs(pdf_path: Path, out_dir: Path, dpi: int = 110) -> list[Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     prefix = out_dir / "slide"
-    subprocess.run(
+    _run(
         [
             "pdftoppm",
             "-jpeg",
@@ -35,9 +54,7 @@ def pdf_to_jpegs(pdf_path: Path, out_dir: Path, dpi: int = 110) -> list[Path]:
             str(dpi),
             str(pdf_path),
             str(prefix),
-        ],
-        check=True,
-        capture_output=True,
+        ]
     )
     return sorted(out_dir.glob("slide-*.jpg"))
 
