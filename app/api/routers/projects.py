@@ -12,6 +12,7 @@ from ..auth import require_tenant
 from ..models.db import (
     BlueprintJobRow,
     BlueprintRow,
+    OutputRow,
     ProjectRow,
     RevisionRow,
     TemplateProfileRow,
@@ -26,6 +27,7 @@ from ..models.schemas import (
     RenderResponse,
     Revision,
     RevisionCreate,
+    SlideMappingPatch,
     SlideSpec,
 )
 from ..services.llm import LLMClient
@@ -60,6 +62,117 @@ def list_projects(
         )
         for r in rows
     ]
+
+
+@router.get("/{project_id}", response_model=Project)
+def get_project(
+    project_id: str,
+    tenant_id: str = Depends(require_tenant),
+    db: Session = Depends(get_session),
+) -> Project:
+    row = _load_project(db, project_id, tenant_id)
+    return Project(
+        id=row.id,
+        tenant_id=row.tenant_id,
+        name=row.name,
+        template_id=row.template_id,
+        status=row.status,
+        created_at=row.created_at,
+    )
+
+
+@router.delete("/{project_id}")
+def delete_project(
+    project_id: str,
+    tenant_id: str = Depends(require_tenant),
+    db: Session = Depends(get_session),
+) -> dict:
+    """Cascade-delete the project's blueprints, revisions, jobs,
+    output rows, and the entire S3 prefix for the project."""
+    row = _load_project(db, project_id, tenant_id)
+
+    # Collect blueprint ids before deleting so we can clean up child
+    # rows by id (no FK ON DELETE CASCADE in the schema).
+    bp_ids = [
+        bp_id
+        for (bp_id,) in db.query(BlueprintRow.id)
+        .filter(BlueprintRow.project_id == project_id)
+        .all()
+    ]
+    if bp_ids:
+        db.query(RevisionRow).filter(RevisionRow.blueprint_id.in_(bp_ids)).delete(
+            synchronize_session=False
+        )
+        db.query(OutputRow).filter(OutputRow.blueprint_id.in_(bp_ids)).delete(
+            synchronize_session=False
+        )
+    db.query(BlueprintJobRow).filter(BlueprintJobRow.project_id == project_id).delete(
+        synchronize_session=False
+    )
+    db.query(BlueprintRow).filter(BlueprintRow.project_id == project_id).delete(
+        synchronize_session=False
+    )
+
+    storage = Storage()
+    deleted_objects = storage.delete_prefix(storage.project_prefix(tenant_id, project_id))
+
+    db.delete(row)
+    db.commit()
+    log.info("project %s deleted (s3 objects removed=%d)", project_id, deleted_objects)
+    return {"deleted": project_id, "s3_objects_deleted": deleted_objects}
+
+
+@router.post("/{project_id}/duplicate", response_model=Project)
+def duplicate_project(
+    project_id: str,
+    tenant_id: str = Depends(require_tenant),
+    db: Session = Depends(get_session),
+) -> Project:
+    """Copy a project and its latest blueprint into a new project that
+    starts at status="draft". Outputs are intentionally not copied —
+    the user is going to edit the blueprint in step 2 anyway, so a
+    fresh render is the right state to land in.
+    """
+    src = _load_project(db, project_id, tenant_id)
+    new_project = ProjectRow(
+        id=str(uuid4()),
+        tenant_id=tenant_id,
+        name=f"{src.name} (copy)",
+        template_id=src.template_id,
+        status="draft",
+    )
+    db.add(new_project)
+    db.flush()  # allocate id before referencing it from the blueprint copy
+
+    latest_bp = (
+        db.query(BlueprintRow)
+        .filter(BlueprintRow.project_id == src.id)
+        .order_by(BlueprintRow.version.desc())
+        .first()
+    )
+    if latest_bp:
+        db.add(
+            BlueprintRow(
+                id=str(uuid4()),
+                project_id=new_project.id,
+                version=1,
+                title=latest_bp.title,
+                # JSON column — pass through directly. Slides keep their
+                # template_slide_index assignments.
+                slides=list(latest_bp.slides),
+            )
+        )
+
+    db.commit()
+    db.refresh(new_project)
+    return Project(
+        id=new_project.id,
+        tenant_id=new_project.tenant_id,
+        name=new_project.name,
+        template_id=new_project.template_id,
+        status=new_project.status,
+        created_at=new_project.created_at,
+    )
 
 
 @router.post("", response_model=Project)
@@ -185,6 +298,44 @@ def get_latest_blueprint(
     )
     if not row:
         raise HTTPException(404, "no blueprint yet")
+    return _to_schema(row)
+
+
+@router.patch("/{project_id}/blueprint", response_model=Blueprint)
+def patch_blueprint_slide_mapping(
+    project_id: str,
+    body: SlideMappingPatch,
+    tenant_id: str = Depends(require_tenant),
+    db: Session = Depends(get_session),
+) -> Blueprint:
+    """Update template_slide_index on individual blueprint slides.
+
+    Body: {"mappings": [{"index": 1, "template_slide_index": 2}, ...]}
+    Indices not present in the payload are left untouched. Updates the
+    LATEST blueprint version in place — does not create a new revision.
+    """
+    project = _load_project(db, project_id, tenant_id)
+    row = (
+        db.query(BlueprintRow)
+        .filter(BlueprintRow.project_id == project.id)
+        .order_by(BlueprintRow.version.desc())
+        .first()
+    )
+    if not row:
+        raise HTTPException(404, "no blueprint yet")
+
+    by_index = {m.index: m.template_slide_index for m in body.mappings}
+    # row.slides is a JSON column — mutate a copy and reassign so
+    # SQLAlchemy notices the change.
+    new_slides = []
+    for s in row.slides:
+        s = dict(s)
+        if s.get("index") in by_index:
+            s["template_slide_index"] = by_index[s["index"]]
+        new_slides.append(s)
+    row.slides = new_slides
+    db.commit()
+    db.refresh(row)
     return _to_schema(row)
 
 

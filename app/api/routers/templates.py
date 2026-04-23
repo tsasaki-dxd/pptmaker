@@ -12,10 +12,24 @@ from ..auth import require_tenant
 from ..models.db import ProjectRow, TemplateProfileRow, get_session
 from ..models.schemas import TemplateCreateResponse, TemplateProfile
 from ..services.storage import Storage
+from ..services.template_analyzer import count_template_slides
 
 log = logging.getLogger("slideforge.templates")
 
 router = APIRouter(prefix="/api/templates", tags=["templates"])
+
+
+def _to_profile(row: TemplateProfileRow) -> TemplateProfile:
+    return TemplateProfile(
+        id=row.id,
+        tenant_id=row.tenant_id,
+        name=row.name,
+        original_s3_path=row.original_s3_path,
+        design_tokens=row.design_tokens,
+        layouts=row.layouts,
+        template_slide_count=row.template_slide_count or 0,
+        created_at=row.created_at,
+    )
 
 
 @router.get("", response_model=list[TemplateProfile])
@@ -29,18 +43,7 @@ def list_templates(
         .order_by(TemplateProfileRow.created_at.desc())
         .all()
     )
-    return [
-        TemplateProfile(
-            id=r.id,
-            tenant_id=r.tenant_id,
-            name=r.name,
-            original_s3_path=r.original_s3_path,
-            design_tokens=r.design_tokens,
-            layouts=r.layouts,
-            created_at=r.created_at,
-        )
-        for r in rows
-    ]
+    return [_to_profile(r) for r in rows]
 
 
 @router.post("", response_model=TemplateCreateResponse)
@@ -82,15 +85,15 @@ def get_template(
         .filter(TemplateProfileRow.id == template_id, TemplateProfileRow.tenant_id == tenant_id)
         .one()
     )
-    return TemplateProfile(
-        id=row.id,
-        tenant_id=row.tenant_id,
-        name=row.name,
-        original_s3_path=row.original_s3_path,
-        design_tokens=row.design_tokens,
-        layouts=row.layouts,
-        created_at=row.created_at,
-    )
+    # Lazy first-time analysis: count slides in the uploaded .pptx and
+    # cache on the row so the UI's per-slide template-page dropdown can
+    # know how many options to offer. Skipped if already populated.
+    if not row.template_slide_count:
+        count = count_template_slides(row.original_s3_path)
+        if count > 0:
+            row.template_slide_count = count
+            db.commit()
+    return _to_profile(row)
 
 
 @router.delete("/{template_id}")

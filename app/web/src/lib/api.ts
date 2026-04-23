@@ -25,6 +25,7 @@ export interface TemplateProfile {
   original_s3_path: string;
   design_tokens: Record<string, unknown>;
   layouts: unknown[];
+  template_slide_count: number;
   created_at: string;
 }
 
@@ -41,6 +42,12 @@ export interface SlideSpec {
   layout: string;
   figure_type?: string;
   content: Record<string, unknown>;
+  template_slide_index?: number | null;
+}
+
+export interface SlideTemplateMapping {
+  index: number;
+  template_slide_index: number;
 }
 
 export interface Blueprint {
@@ -87,11 +94,16 @@ export const api = {
     if (!res.ok) throw new Error(`upload failed: ${res.status} ${await res.text()}`);
   },
   listProjects: () => request<Project[]>('/api/projects'),
+  getProject: (id: string) => request<Project>(`/api/projects/${id}`),
   createProject: (name: string, template_id: string) =>
     request<Project>('/api/projects', {
       method: 'POST',
       body: JSON.stringify({ name, template_id }),
     }),
+  deleteProject: (id: string) =>
+    request<{ deleted: string }>(`/api/projects/${id}`, { method: 'DELETE' }),
+  duplicateProject: (id: string) =>
+    request<Project>(`/api/projects/${id}/duplicate`, { method: 'POST' }),
   createBlueprint: (project_id: string, intent: string, required_sections: string[]) =>
     request<BlueprintJob>(`/api/projects/${project_id}/blueprint`, {
       method: 'POST',
@@ -100,6 +112,11 @@ export const api = {
   getBlueprintJob: (project_id: string, job_id: string) =>
     request<BlueprintJob>(`/api/projects/${project_id}/blueprint/job/${job_id}`),
   getBlueprint: (project_id: string) => request<Blueprint>(`/api/projects/${project_id}/blueprint`),
+  patchBlueprintMapping: (project_id: string, mappings: SlideTemplateMapping[]) =>
+    request<Blueprint>(`/api/projects/${project_id}/blueprint`, {
+      method: 'PATCH',
+      body: JSON.stringify({ mappings }),
+    }),
   revise: (project_id: string, instruction: string) =>
     request<{ id: string; patch: unknown[] }>(`/api/projects/${project_id}/revise`, {
       method: 'POST',
