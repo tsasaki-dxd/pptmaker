@@ -33,6 +33,15 @@ import boto3
 from .db_status import update_project_status
 from .layout_renderer import RenderRequest, render_content_slide
 from .preview import pdf_to_jpegs, pptx_to_pdf
+from .pptx_assembler import (
+    assign_default_template_indices,
+    derive_slides,
+    read_template_slides,
+    rewrite_content_types,
+    rewrite_presentation_rels,
+    rewrite_presentation_xml,
+    write_output_slides,
+)
 from .template_loader import repack, safe_unpack
 
 log = logging.getLogger("slideforge.render")
@@ -99,26 +108,24 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
 
         unpacked = safe_unpack(tpl_local, work / "unpacked")
 
-        # The current renderer maps blueprint slide N -> template slide N
-        # 1:1. We don't yet duplicate template slides to grow the deck,
-        # so any blueprint slide past the template's actual slide count
-        # has nothing to render into. Truncate up front instead of
-        # logging FileNotFoundError per slide and leaving the rest of
-        # the deck empty.
-        template_slide_count = len(
-            list((unpacked.root / "ppt" / "slides").glob("slide*.xml"))
-        )
-        all_slides = job.blueprint.get("slides", [])
-        slides = all_slides[:template_slide_count]
-        if len(all_slides) > template_slide_count:
-            log.warning(
-                "blueprint has %d slides but template has only %d; truncating",
-                len(all_slides),
-                template_slide_count,
-            )
+        # Snapshot the template's original slide files before we wipe
+        # them — many output slides may derive from one template slide
+        # (intentional; that's how a 6-page template fills a 20-slide
+        # blueprint).
+        template_slides = read_template_slides(unpacked.root)
+        if not template_slides:
+            raise RuntimeError("template has no slide files (ppt/slides/slide*.xml)")
+        template_slide_count = max(template_slides.keys())
+
+        blueprint_slides = job.blueprint.get("slides", [])
+        if not blueprint_slides:
+            raise RuntimeError("blueprint has no slides")
+
+        chosen = assign_default_template_indices(blueprint_slides, template_slide_count)
+        xmls, rels = derive_slides(template_slides, chosen)
 
         skipped: list[int] = []
-        for i, slide in enumerate(slides, start=1):
+        for i, (slide, src_xml) in enumerate(zip(blueprint_slides, xmls), start=1):
             req = RenderRequest(
                 slide_index=i,
                 layout=slide.get("layout", "content"),
@@ -126,19 +133,28 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
                 content=slide.get("content", {}),
             )
             try:
-                original_xml = unpacked.read_slide(i)
-            except FileNotFoundError:
-                log.warning("slide %d not found in template, skipping", i)
-                continue
-            try:
-                new_xml = render_content_slide(original_xml, req, start_shape_id=1000 + 100 * i)
-                unpacked.write_slide(i, new_xml)
+                xmls[i - 1] = render_content_slide(
+                    src_xml, req, start_shape_id=1000 + 100 * i
+                )
             except Exception:
-                # Don't kill the entire deck on one malformed slide. Log
-                # and leave the template's original slide in place so the
-                # user still gets something back.
-                log.exception("render failed for slide %d (figure=%s); skipping", i, req.figure_type)
+                # Leave the unmodified template XML in place for this
+                # slide so the user still gets a deck, log loud enough
+                # to investigate.
+                log.exception(
+                    "render failed for slide %d (figure=%s); using template page %d unmodified",
+                    i,
+                    req.figure_type,
+                    chosen[i - 1],
+                )
                 skipped.append(i)
+
+        # Replace the slide files and the package metadata that points
+        # at them. Order matters: write slide files first, then the
+        # presentation/rels/content-types so they reference real files.
+        write_output_slides(unpacked.root, xmls, rels)
+        rewrite_presentation_xml(unpacked.root, len(xmls))
+        rewrite_presentation_rels(unpacked.root, len(xmls))
+        rewrite_content_types(unpacked.root, len(xmls))
 
         out_pptx = work / "output.pptx"
         repack(unpacked, out_pptx)
@@ -168,8 +184,8 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
             "pptx": pptx_key,
             "pdf": pdf_key,
             "previews": preview_keys,
-            "slide_count": len(slides),
-            "blueprint_slide_count": len(all_slides),
+            "slide_count": len(xmls),
+            "template_pages_used": chosen,
             "skipped_slides": skipped,
         }
 

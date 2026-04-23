@@ -31,6 +31,7 @@ class TemplateProfile(BaseModel):
     original_s3_path: str
     design_tokens: dict[str, Any] = Field(default_factory=dict)
     layouts: list[dict[str, Any]] = Field(default_factory=list)
+    template_slide_count: int = 0
     created_at: datetime
 
 
@@ -58,6 +59,12 @@ class SlideSpec(BaseModel):
     layout: LayoutKind
     figure_type: FigureType | None = None
     content: dict[str, Any] = Field(default_factory=dict)
+    # Which template page this slide is rendered from. Auto-assigned by
+    # cycling through the template's pages if left None; user can
+    # override per-slide via PATCH on the blueprint. The render Lambda
+    # uses this to copy the chosen template page's XML and overlay
+    # blueprint content.
+    template_slide_index: int | None = Field(default=None, ge=1)
 
 
 class Blueprint(BaseModel):
@@ -86,6 +93,17 @@ class BlueprintJob(BaseModel):
     blueprint_id: UUID | None = None
     error: str | None = None
     created_at: datetime | None = None
+
+
+class SlideTemplateMapping(BaseModel):
+    """One row in a PATCH /blueprint payload: slide N uses template page T."""
+
+    index: int = Field(ge=1)
+    template_slide_index: int = Field(ge=1)
+
+
+class SlideMappingPatch(BaseModel):
+    mappings: list[SlideTemplateMapping]
 
 
 class RevisionCreate(BaseModel):

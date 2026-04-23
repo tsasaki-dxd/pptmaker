@@ -31,6 +31,9 @@ class TemplateProfileRow(Base):
     original_s3_path: Mapped[str] = mapped_column(String(500))
     design_tokens: Mapped[dict] = mapped_column(JSON, default=dict)
     layouts: Mapped[list] = mapped_column(JSON, default=list)
+    # Number of slide{N}.xml files inside the uploaded .pptx. 0 means
+    # not yet analyzed; populated lazily on first GET /api/templates/{id}.
+    template_slide_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -120,8 +123,30 @@ def _ensure_tables() -> None:
     global _tables_ready
     if _tables_ready:
         return
-    Base.metadata.create_all(get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(engine)
+    _add_missing_columns(engine)
     _tables_ready = True
+
+
+def _add_missing_columns(engine) -> None:
+    """Tiny in-place migration for columns added after a table existed.
+    create_all() is a no-op on tables that already exist, so it never
+    adds new columns. Phase 1 doesn't run Alembic, so we ALTER TABLE
+    here. PostgreSQL ADD COLUMN IF NOT EXISTS is idempotent; SQLite
+    test DBs are recreated each run so they don't need the migration.
+    """
+    from sqlalchemy import text
+
+    if engine.dialect.name != "postgresql":
+        return
+    statements = [
+        "ALTER TABLE template_profiles "
+        "ADD COLUMN IF NOT EXISTS template_slide_count INTEGER DEFAULT 0",
+    ]
+    with engine.begin() as conn:
+        for stmt in statements:
+            conn.execute(text(stmt))
 
 
 def get_session():

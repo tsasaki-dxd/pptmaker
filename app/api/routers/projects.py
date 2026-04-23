@@ -26,6 +26,7 @@ from ..models.schemas import (
     RenderResponse,
     Revision,
     RevisionCreate,
+    SlideMappingPatch,
     SlideSpec,
 )
 from ..services.llm import LLMClient
@@ -202,6 +203,44 @@ def get_latest_blueprint(
     )
     if not row:
         raise HTTPException(404, "no blueprint yet")
+    return _to_schema(row)
+
+
+@router.patch("/{project_id}/blueprint", response_model=Blueprint)
+def patch_blueprint_slide_mapping(
+    project_id: str,
+    body: SlideMappingPatch,
+    tenant_id: str = Depends(require_tenant),
+    db: Session = Depends(get_session),
+) -> Blueprint:
+    """Update template_slide_index on individual blueprint slides.
+
+    Body: {"mappings": [{"index": 1, "template_slide_index": 2}, ...]}
+    Indices not present in the payload are left untouched. Updates the
+    LATEST blueprint version in place — does not create a new revision.
+    """
+    project = _load_project(db, project_id, tenant_id)
+    row = (
+        db.query(BlueprintRow)
+        .filter(BlueprintRow.project_id == project.id)
+        .order_by(BlueprintRow.version.desc())
+        .first()
+    )
+    if not row:
+        raise HTTPException(404, "no blueprint yet")
+
+    by_index = {m.index: m.template_slide_index for m in body.mappings}
+    # row.slides is a JSON column — mutate a copy and reassign so
+    # SQLAlchemy notices the change.
+    new_slides = []
+    for s in row.slides:
+        s = dict(s)
+        if s.get("index") in by_index:
+            s["template_slide_index"] = by_index[s["index"]]
+        new_slides.append(s)
+    row.slides = new_slides
+    db.commit()
+    db.refresh(row)
     return _to_schema(row)
 
 
