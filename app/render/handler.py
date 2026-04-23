@@ -214,6 +214,25 @@ def _download(s3_uri: str, dest: Path) -> None:
     s3.download_file(parsed.netloc, parsed.path.lstrip("/"), str(dest))
 
 
+# Browsers download instead of rendering inline when S3 serves an
+# object as application/octet-stream, so preview JPEGs have to go up
+# with explicit Content-Type. The .pptx one is about the user saving
+# it with the right extension; without the header, the file ends up
+# as "output.pptx" but .octet-stream and Windows / macOS get confused.
+_CONTENT_TYPE_BY_EXT = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".pdf": "application/pdf",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+
+
 def _upload(src: Path, s3_uri: str) -> None:
     parsed = urlparse(s3_uri)
-    s3.upload_file(str(src), parsed.netloc, parsed.path.lstrip("/"))
+    bucket, key = parsed.netloc, parsed.path.lstrip("/")
+    ct = _CONTENT_TYPE_BY_EXT.get(src.suffix.lower())
+    if ct:
+        s3.upload_file(str(src), bucket, key, ExtraArgs={"ContentType": ct})
+    else:
+        s3.upload_file(str(src), bucket, key)

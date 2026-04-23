@@ -33,7 +33,18 @@ def render_content_slide(
     font: str = DEFAULT_FONT,
     start_shape_id: int = 1000,
 ) -> str:
-    """Return updated slide XML with title replaced and figure shapes injected."""
+    """Return updated slide XML with:
+      1. Title placeholder text replaced.
+      2. Body / content / subtitle placeholders stripped (we inject our
+         own shapes in their place; leaving them in shows the template's
+         placeholder text like "B" or "本文をここに入れる" bleeding
+         through behind our figure).
+      3. Figure shapes injected before </p:spTree>.
+
+    Decorative (non-placeholder) shapes like the CONTENT ribbon or the
+    company logo in the corner are preserved — they're not inside
+    <p:ph> so the stripper leaves them alone.
+    """
     out = slide_xml
 
     title = req.content.get("title")
@@ -41,6 +52,7 @@ def render_content_slide(
         out = _replace_title(out, title)
 
     if req.figure_type:
+        out = _strip_body_placeholders(out)
         renderer = renderer_for(req.figure_type)
         vr = renderer.validate(req.content)
         if not vr.ok:
@@ -52,18 +64,58 @@ def render_content_slide(
     return out
 
 
+# <p:ph> placeholder types — see ECMA-376 §19.7.10. Anything not in
+# this set gets stripped so our figure shapes don't sit on top of the
+# template's "本文をここに入れる" filler.
+_TITLE_PH_TYPES = {"title", "ctrTitle"}
+
+
 def _replace_title(slide_xml: str, title: str) -> str:
-    """Replace the first <a:t>...</a:t> inside a title placeholder."""
+    """Replace the first <a:t>...</a:t> inside a title placeholder.
+
+    Matches any <p:sp> whose <p:ph> has type="title" / "ctrTitle" or
+    (when type is omitted) idx="0" — the three ways PowerPoint marks a
+    title box in practice.
+    """
     pattern = re.compile(
-        r'(<p:sp>\s*<p:nvSpPr>.*?ph type="title".*?)<a:t>[^<]*</a:t>',
+        r'(<p:sp\b[^>]*>.*?<p:ph\b[^/>]*'
+        r'(?:type="(?:title|ctrTitle)"|idx="0")'
+        r'[^/>]*/?>.*?)<a:t>[^<]*</a:t>',
         re.DOTALL,
     )
     replacement = r"\1<a:t>" + _escape(title) + r"</a:t>"
     new, n = pattern.subn(replacement, slide_xml, count=1)
     if n == 0:
-        # Fallback: replace very first <a:t>
+        # Fallback: replace the very first <a:t> text run in the slide.
         new = re.sub(r"<a:t>[^<]*</a:t>", f"<a:t>{_escape(title)}</a:t>", slide_xml, count=1)
     return new
+
+
+def _strip_body_placeholders(slide_xml: str) -> str:
+    """Remove any <p:sp> that represents a non-title placeholder.
+
+    Placeholder shapes are the ones whose <p:nvSpPr> contains <p:ph>.
+    Template decorations (logos, ribbon banners, footer lines) are
+    non-placeholder <p:sp> or <p:pic> / <p:grpSp> — those pass through
+    untouched.
+    """
+    sp_block = re.compile(r"<p:sp\b[^>]*>.*?</p:sp>", re.DOTALL)
+
+    def _keep(match: re.Match) -> str:
+        block = match.group(0)
+        ph_match = re.search(r"<p:ph\b([^/>]*)/?>", block)
+        if not ph_match:
+            return block  # decoration; keep
+        attrs = ph_match.group(1)
+        type_match = re.search(r'type="([^"]+)"', attrs)
+        if type_match and type_match.group(1) in _TITLE_PH_TYPES:
+            return block  # title — keep (text was replaced above)
+        # No type + idx="0" also means title
+        if not type_match and re.search(r'idx="0"', attrs):
+            return block
+        return ""  # body / content / subtitle / etc — drop
+
+    return sp_block.sub(_keep, slide_xml)
 
 
 def _escape(s: str) -> str:

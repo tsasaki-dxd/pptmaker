@@ -32,6 +32,10 @@ export default function ProjectsPage() {
   const [revisionText, setRevisionText] = useState('');
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState<string[]>([]);
+  const [previewModal, setPreviewModal] = useState<{
+    projectName: string;
+    slides: { slide_index: number; url: string }[];
+  } | null>(null);
 
   const push = (msg: string) => setLog((prev) => [...prev, msg]);
 
@@ -209,10 +213,10 @@ export default function ProjectsPage() {
     setIntent('');
   }
 
-  async function handlePreview(projectId: string, slide = 1) {
+  async function handleOpenPreviewGallery(p: Project) {
     try {
-      const res = await api.preview(projectId, slide);
-      window.open(res.url, '_blank');
+      const res = await api.listPreviews(p.id);
+      setPreviewModal({ projectName: p.name, slides: res.slides });
     } catch (e) {
       push(`プレビュー取得失敗: ${String(e)}`);
     }
@@ -314,13 +318,76 @@ export default function ProjectsPage() {
 
       <ProjectsList
         projects={projects}
-        onPreview={handlePreview}
+        onPreview={handleOpenPreviewGallery}
         onExport={handleExport}
         onDuplicate={handleDuplicateProject}
         onDelete={handleDeleteProject}
         busy={busy}
       />
+
+      {previewModal && (
+        <PreviewModal
+          projectName={previewModal.projectName}
+          slides={previewModal.slides}
+          onClose={() => setPreviewModal(null)}
+        />
+      )}
     </section>
+  );
+}
+
+function PreviewModal(props: {
+  projectName: string;
+  slides: { slide_index: number; url: string }[];
+  onClose: () => void;
+}) {
+  const { projectName, slides, onClose } = props;
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/60 p-6"
+      onClick={onClose}
+    >
+      <div
+        className="my-8 w-full max-w-5xl rounded bg-white p-4 shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-3 flex items-baseline justify-between">
+          <div>
+            <h3 className="text-base font-bold">{projectName} — プレビュー</h3>
+            <div className="text-xs text-muted">全 {slides.length} 枚</div>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded border border-purple-lt px-3 py-1 text-sm hover:bg-purple-lt/20"
+          >
+            閉じる
+          </button>
+        </div>
+        {slides.length === 0 ? (
+          <p className="text-sm text-muted">プレビュー画像がありません。</p>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {slides.map((s) => (
+              <a
+                key={s.slide_index}
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block overflow-hidden rounded border border-purple-lt/60"
+              >
+                <img
+                  src={s.url}
+                  alt={`slide ${s.slide_index}`}
+                  className="w-full"
+                  loading="lazy"
+                />
+                <div className="px-2 py-1 text-xs text-muted">#{s.slide_index}</div>
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -586,7 +653,7 @@ function Step3Result(props: { step: Step; project: Project | null; onStartOver: 
 // ──────────────────────────────────────────────────────────────────────
 function ProjectsList(props: {
   projects: Project[];
-  onPreview: (id: string, slide: number) => void;
+  onPreview: (p: Project) => void;
   onExport: (id: string, format: 'pptx' | 'pdf') => void;
   onDuplicate: (p: Project) => void;
   onDelete: (p: Project) => void;
@@ -651,10 +718,10 @@ function ProjectsList(props: {
               ) : (
                 <div className="flex gap-2">
                   <button
-                    onClick={() => onPreview(p.id, 1)}
+                    onClick={() => onPreview(p)}
                     className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20"
                   >
-                    プレビュー(1)
+                    プレビュー
                   </button>
                   <button
                     onClick={() => onExport(p.id, 'pptx')}
