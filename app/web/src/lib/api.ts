@@ -87,6 +87,7 @@ export const api = {
     if (!res.ok) throw new Error(`upload failed: ${res.status} ${await res.text()}`);
   },
   listProjects: () => request<Project[]>('/api/projects'),
+  getProject: (id: string) => request<Project>(`/api/projects/${id}`),
   createProject: (name: string, template_id: string) =>
     request<Project>('/api/projects', {
       method: 'POST',

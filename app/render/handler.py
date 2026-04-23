@@ -30,6 +30,7 @@ from urllib.parse import urlparse
 
 import boto3
 
+from .db_status import update_project_status
 from .layout_renderer import RenderRequest, render_content_slide
 from .preview import pdf_to_jpegs, pptx_to_pdf
 from .template_loader import repack, safe_unpack
@@ -57,13 +58,25 @@ def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
         results = []
         for record in event["Records"]:
             job = _parse_job(json.loads(record["body"]))
-            results.append(_process_job(job))
+            results.append(_run(job))
         return {"jobs": results}
 
     job = _parse_job(event)
-    result = _process_job(job)
+    result = _run(job)
     log.info("render complete job=%s elapsed_ms=%d", job.job_id, int((time.time() - start) * 1000))
     return result
+
+
+def _run(job: RenderJob) -> dict[str, Any]:
+    """Wrap _process_job with project status write-back so the UI can
+    poll ProjectRow.status to know when the deck is actually ready."""
+    try:
+        result = _process_job(job)
+        update_project_status(job.project_id, "complete")
+        return result
+    except Exception:
+        update_project_status(job.project_id, "failed")
+        raise
 
 
 def _parse_job(payload: dict[str, Any]) -> RenderJob:

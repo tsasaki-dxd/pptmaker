@@ -62,6 +62,23 @@ def list_projects(
     ]
 
 
+@router.get("/{project_id}", response_model=Project)
+def get_project(
+    project_id: str,
+    tenant_id: str = Depends(require_tenant),
+    db: Session = Depends(get_session),
+) -> Project:
+    row = _load_project(db, project_id, tenant_id)
+    return Project(
+        id=row.id,
+        tenant_id=row.tenant_id,
+        name=row.name,
+        template_id=row.template_id,
+        status=row.status,
+        created_at=row.created_at,
+    )
+
+
 @router.post("", response_model=Project)
 def create_project(
     body: ProjectCreate,

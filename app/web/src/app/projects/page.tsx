@@ -58,13 +58,39 @@ export default function ProjectsPage() {
       const r = await api.render(project.id);
       push(`job_id = ${r.job_id} status=${r.status}`);
 
-      push('完了まで 30〜60 秒待って preview/export URL を取得してください');
+      push('レンダリング polling...');
+      const renderResult = await pollRenderComplete(project.id);
+      if (renderResult === 'failed') {
+        throw new Error('レンダリングに失敗しました (詳細は CloudWatch ログ参照)');
+      }
+      push('レンダリング完了。preview/.pptx/.pdf ボタンが使えます。');
       await refresh();
     } catch (e) {
       push(`失敗: ${String(e)}`);
+      await refresh();
     } finally {
       setBusy(false);
     }
+  }
+
+  async function pollRenderComplete(projectId: string): Promise<'complete' | 'failed'> {
+    // Render takes ~60-120s in practice (LibreOffice cold start +
+    // pptx→pdf→jpeg). Poll every 3s up to 5 minutes.
+    const intervalMs = 3000;
+    const maxAttempts = 100;
+    const startedAt = Date.now();
+    for (let i = 0; i < maxAttempts; i++) {
+      const p = await api.getProject(projectId);
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      if (p.status === 'complete' || p.status === 'failed') {
+        return p.status;
+      }
+      if (i > 0 && i % 5 === 0) {
+        setLog((prev) => [...prev.slice(0, -1), `レンダリング polling... (${elapsed}s / 300s, status=${p.status})`]);
+      }
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    throw new Error('レンダリングがタイムアウトしました（5分経過）');
   }
 
   async function pollBlueprintJob(
@@ -200,6 +226,12 @@ export default function ProjectsPage() {
                 {p.status === 'draft' ? (
                   <div className="text-xs text-muted">
                     まだレンダリングされていません。上のフォームから実行してください。
+                  </div>
+                ) : p.status === 'rendering' ? (
+                  <div className="text-xs text-muted">レンダリング中...</div>
+                ) : p.status === 'failed' ? (
+                  <div className="text-xs text-red-600">
+                    レンダリング失敗。CloudWatch ログを確認してください。
                   </div>
                 ) : (
                   <div className="flex gap-2">

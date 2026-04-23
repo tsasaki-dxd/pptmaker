@@ -289,6 +289,12 @@ class AppStack(cdk.Stack):
             dead_letter_queue=sqs.DeadLetterQueue(max_receive_count=2, queue=blueprint_dlq),
         )
 
+        # Render Lambda needs DB access so it can flip
+        # ProjectRow.status to "complete"/"failed" when a job finishes —
+        # otherwise the UI has no way to know when to enable the
+        # preview/.pptx/.pdf buttons. Putting it in the same private
+        # subnets as the API Lambda + sharing lambda_sg gives it RDS
+        # access (already allowed by RdsSg ingress rule above).
         self.render_function = lambda_.DockerImageFunction(
             self,
             "RenderFunction",
@@ -299,13 +305,19 @@ class AppStack(cdk.Stack):
             memory_size=3008,
             timeout=cdk.Duration.minutes(5),
             ephemeral_storage_size=cdk.Size.gibibytes(2),
+            vpc=self.vpc,
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS),
+            security_groups=[lambda_sg],
             environment={
                 "ENV": stage_name,
                 "LOG_LEVEL": "INFO",
                 "S3_BUCKET": self.artifacts_bucket.bucket_name,
+                "DB_SECRET_ARN": self.db_secret.secret_arn,
+                "DB_ENDPOINT": self.db.instance_endpoint.hostname,
             },
         )
         self.artifacts_bucket.grant_read_write(self.render_function)
+        self.db_secret.grant_read(self.render_function)
         self.render_function.add_event_source(
             lambda_events.SqsEventSource(self.render_queue, batch_size=1)
         )
