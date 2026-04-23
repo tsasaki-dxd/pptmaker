@@ -24,6 +24,11 @@ FigureType = Literal[
     "matrix_2x2",
     "swot",
     "pyramid",
+    "org_chart",
+    "kpi_dashboard",
+    "pull_quote",
+    "icon_list",
+    "process_flow",
 ]
 
 
