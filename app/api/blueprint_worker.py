@@ -26,6 +26,7 @@ from .models.db import (
 )
 from .services.blueprint_builder import BlueprintBuildError, build_blueprint
 from .services.llm import LLMClient
+from .services.template_analyzer import analyze_template
 
 log = logging.getLogger("slideforge.blueprint_worker")
 log.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -87,10 +88,25 @@ def _process(msg: dict[str, Any]) -> None:
             _mark_failed(db, job, "template no longer exists")
             return
 
+        # Ensure template.layouts (classifier output) is populated — both
+        # so the LLM knows what pages exist and so we can assign default
+        # template_slide_index by layout match afterwards. GET
+        # /api/templates/{id} does this eagerly but the SQS message
+        # might arrive first on a fresh template.
+        if not template.layouts or not template.template_slide_count:
+            a = analyze_template(template.original_s3_path)
+            if a:
+                if a.slide_count:
+                    template.template_slide_count = a.slide_count
+                if a.layouts:
+                    template.layouts = a.layouts
+                db.commit()
+
         template_summary = (
             f"テンプレート名: {template.name}\n"
             f"S3: {template.original_s3_path}\n"
-            f"レイアウト数: {len(template.layouts)}"
+            f"総ページ数: {template.template_slide_count}\n"
+            f"構成: {_describe_layouts(template.layouts)}"
         )
 
         try:
@@ -106,6 +122,8 @@ def _process(msg: dict[str, Any]) -> None:
             # redeliver forever, mark failed and ack.
             _mark_failed(db, job, f"blueprint build failed: {e}")
             return
+
+        _assign_template_mapping(parsed.get("slides") or [], template.layouts or [])
 
         latest = (
             db.query(BlueprintRow)
@@ -144,3 +162,60 @@ def _mark_failed(db: Any, job: BlueprintJobRow, error: str) -> None:
     job.error_message = error[:2000]
     db.commit()
     log.error("job %s failed: %s", job.id, error)
+
+
+def _describe_layouts(layouts: list[dict]) -> str:
+    """Compact human-readable breakdown of a template's pages for the
+    blueprint LLM prompt, e.g. '#1 cover, #2 toc, #3-5 content, #6 disclaimer'."""
+    if not layouts:
+        return "(未分類)"
+    return ", ".join(
+        f"#{int(layout.get('index', i + 1))} {layout.get('layout', 'content')}"
+        for i, layout in enumerate(layouts)
+    )
+
+
+def _assign_template_mapping(
+    blueprint_slides: list[dict],
+    template_layouts: list[dict],
+) -> None:
+    """Set template_slide_index on each blueprint slide by matching its
+    layout against the classified template pages.
+
+    Strategy:
+      - Group template pages by layout type.
+      - For a blueprint slide of layout X, cycle through template pages
+        of layout X. If no such template page exists, fall back to
+        template "content" pages (the generic bucket), then finally to
+        a simple positional cycle.
+
+    Mutates blueprint_slides in place. Existing non-null
+    template_slide_index values are respected.
+    """
+    if not template_layouts:
+        return  # render handler will do its own positional cycling
+
+    by_type: dict[str, list[int]] = {}
+    for entry in template_layouts:
+        by_type.setdefault(entry.get("layout", "content"), []).append(
+            int(entry.get("index", 0))
+        )
+
+    content_pages = by_type.get("content") or []
+    total = max((int(entry.get("index", 0)) for entry in template_layouts), default=0)
+    if total <= 0:
+        return
+
+    counters: dict[str, int] = {}
+    for i, slide in enumerate(blueprint_slides):
+        if isinstance(slide.get("template_slide_index"), int):
+            continue  # user already overrode (won't happen on fresh LLM output, but safe)
+        want = slide.get("layout", "content")
+        candidates = by_type.get(want) or content_pages
+        if not candidates:
+            # No content pages either — fall back to positional cycle.
+            slide["template_slide_index"] = (i % total) + 1
+            continue
+        c = counters.get(want, 0)
+        slide["template_slide_index"] = candidates[c % len(candidates)]
+        counters[want] = c + 1

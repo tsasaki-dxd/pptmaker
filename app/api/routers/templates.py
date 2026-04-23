@@ -12,7 +12,7 @@ from ..auth import require_tenant
 from ..models.db import ProjectRow, TemplateProfileRow, get_session
 from ..models.schemas import TemplateCreateResponse, TemplateProfile
 from ..services.storage import Storage
-from ..services.template_analyzer import count_template_slides
+from ..services.template_analyzer import analyze_template
 
 log = logging.getLogger("slideforge.templates")
 
@@ -85,13 +85,17 @@ def get_template(
         .filter(TemplateProfileRow.id == template_id, TemplateProfileRow.tenant_id == tenant_id)
         .one()
     )
-    # Lazy first-time analysis: count slides in the uploaded .pptx and
-    # cache on the row so the UI's per-slide template-page dropdown can
-    # know how many options to offer. Skipped if already populated.
-    if not row.template_slide_count:
-        count = count_template_slides(row.original_s3_path)
-        if count > 0:
-            row.template_slide_count = count
+    # Lazy first-time analysis: count slides AND classify each one
+    # (cover / toc / section_divider / content / about / disclaimer)
+    # so step 2's dropdown can show a layout hint per option and the
+    # blueprint worker can assign defaults by type instead of cycling.
+    # Skipped if already populated.
+    if not row.template_slide_count or not row.layouts:
+        analysis = analyze_template(row.original_s3_path)
+        if analysis and analysis.slide_count > 0:
+            row.template_slide_count = analysis.slide_count
+            if analysis.layouts:
+                row.layouts = analysis.layouts
             db.commit()
     return _to_profile(row)
 

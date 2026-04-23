@@ -18,13 +18,20 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await res.json()) as T;
 }
 
+export interface TemplateLayoutEntry {
+  index: number;
+  layout: string;
+  confidence?: number;
+  reason?: string;
+}
+
 export interface TemplateProfile {
   id: string;
   tenant_id: string;
   name: string;
   original_s3_path: string;
   design_tokens: Record<string, unknown>;
-  layouts: unknown[];
+  layouts: TemplateLayoutEntry[];
   template_slide_count: number;
   created_at: string;
 }

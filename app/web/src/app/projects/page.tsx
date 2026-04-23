@@ -8,6 +8,7 @@ import {
   type Project,
   type SlideSpec,
   type SlideTemplateMapping,
+  type TemplateLayoutEntry,
   type TemplateProfile,
 } from '@/lib/api';
 
@@ -437,6 +438,7 @@ function Step2Review(props: {
                 key={s.index}
                 slide={s}
                 templatePages={templatePages}
+                templateLayouts={template?.layouts ?? []}
                 onMappingChange={onMappingChange}
                 disabled={busy}
               />
@@ -488,14 +490,20 @@ function Step2Review(props: {
 function SlideRow(props: {
   slide: SlideSpec;
   templatePages: number;
+  templateLayouts: TemplateLayoutEntry[];
   onMappingChange: (slideIndex: number, value: number) => void;
   disabled: boolean;
 }) {
-  const { slide, templatePages, onMappingChange, disabled } = props;
+  const { slide, templatePages, templateLayouts, onMappingChange, disabled } = props;
   const summary = summarizeContent(slide);
   const current =
     slide.template_slide_index ??
     (templatePages > 0 ? ((slide.index - 1) % templatePages) + 1 : 1);
+  // Build a lookup so dropdown options show the layout classification
+  // next to the page number (e.g. "#3 (section_divider)"). Unclassified
+  // templates fall back to just "#N".
+  const layoutByIndex = new Map<number, string>();
+  for (const l of templateLayouts) layoutByIndex.set(l.index, l.layout);
   return (
     <tr className="border-t border-purple-lt/40">
       <td className="px-2 py-1 align-top font-mono">{slide.index}</td>
@@ -510,11 +518,14 @@ function SlideRow(props: {
             disabled={disabled}
             className="rounded border border-purple-lt px-1 py-0.5 text-xs"
           >
-            {Array.from({ length: templatePages }, (_, i) => i + 1).map((n) => (
-              <option key={n} value={n}>
-                #{n}
-              </option>
-            ))}
+            {Array.from({ length: templatePages }, (_, i) => i + 1).map((n) => {
+              const lt = layoutByIndex.get(n);
+              return (
+                <option key={n} value={n}>
+                  {lt ? `#${n} (${lt})` : `#${n}`}
+                </option>
+              );
+            })}
           </select>
         ) : (
           <span className="text-muted">N/A</span>
