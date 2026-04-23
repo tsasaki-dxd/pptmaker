@@ -12,7 +12,6 @@ from render.pptx_assembler import (
     NS,
     SLIDE_CONTENT_TYPE,
     SLIDE_REL_TYPE,
-    TemplateSlide,
     assign_default_template_indices,
     derive_slides,
     read_template_slides,
