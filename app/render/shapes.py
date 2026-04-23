@@ -8,8 +8,14 @@ LibreOffice accepts them silently.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import colorsys
+import logging
+from dataclasses import dataclass, fields
 from typing import Final
+
+from render.theme_loader import Theme
+
+_log = logging.getLogger(__name__)
 
 EMU_PER_INCH: Final[int] = 914400
 
@@ -29,20 +35,116 @@ class Palette:
     """Color palette (hex without #)."""
 
     purple: str = "8B7AB8"
-    purple_lt: str = "D9D1E8"
-    purple_dk: str = "6B5C96"
-    purple_bg: str = "F5F2F9"
+    purple_lt: str = "B9AFD4"
+    purple_dk: str = "6A55A0"
+    purple_bg: str = "EEEBF4"
     black: str = "3A3A42"
     dark: str = "5E5C6A"
-    muted: str = "9B98A6"
+    muted: str = "9B9BA2"
     border: str = "E8E6EC"
-    bg_alt: str = "FAFAFB"
+    bg_alt: str = "FFFFFF"
     amber: str = "C4A05C"
     green: str = "5E9B7F"
 
 
 DEFAULT_PALETTE = Palette()
 DEFAULT_FONT = "Noto Sans JP"
+
+
+def _is_valid_hex6(s: object) -> bool:
+    if not isinstance(s, str) or len(s) != 6:
+        return False
+    try:
+        int(s, 16)
+    except ValueError:
+        return False
+    return True
+
+
+def _hex_to_hsl(h: str) -> tuple[float, float, float]:
+    r = int(h[0:2], 16) / 255.0
+    g = int(h[2:4], 16) / 255.0
+    b = int(h[4:6], 16) / 255.0
+    hue, light, sat = colorsys.rgb_to_hls(r, g, b)
+    return (hue, sat, light)
+
+
+def _hsl_to_hex(hsl: tuple[float, float, float]) -> str:
+    hue, sat, light = hsl
+    light = max(0.0, min(1.0, light))
+    sat = max(0.0, min(1.0, sat))
+    r, g, b = colorsys.hls_to_rgb(hue, light, sat)
+    return f"{round(r * 255):02X}{round(g * 255):02X}{round(b * 255):02X}"
+
+
+def _lighten(hex6: str, amount: float) -> str:
+    hue, sat, light = _hex_to_hsl(hex6)
+    new_l = light + (1.0 - light) * amount
+    return _hsl_to_hex((hue, sat, new_l))
+
+
+def _darken(hex6: str, amount: float) -> str:
+    hue, sat, light = _hex_to_hsl(hex6)
+    new_l = light * (1.0 - amount)
+    return _hsl_to_hex((hue, sat, new_l))
+
+
+def _midpoint_hsl(a: str, b: str) -> str:
+    a_h, a_s, a_l = _hex_to_hsl(a)
+    _, b_s, b_l = _hex_to_hsl(b)
+    return _hsl_to_hex((a_h, (a_s + b_s) / 2.0, (a_l + b_l) / 2.0))
+
+
+def _relative_luminance(hex6: str) -> float:
+    r = int(hex6[0:2], 16) / 255.0
+    g = int(hex6[2:4], 16) / 255.0
+    b = int(hex6[4:6], 16) / 255.0
+
+    def _ch(c: float) -> float:
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * _ch(r) + 0.7152 * _ch(g) + 0.0722 * _ch(b)
+
+
+def _contrast_ratio(fg: str, bg: str) -> float:
+    l1 = _relative_luminance(fg)
+    l2 = _relative_luminance(bg)
+    lighter, darker = (l1, l2) if l1 >= l2 else (l2, l1)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _pick(raw: object, default: str, slot_name: str) -> str:
+    if _is_valid_hex6(raw):
+        return raw.upper()  # type: ignore[union-attr]
+    _log.warning("palette_from_theme: invalid %s=%r, using default %s", slot_name, raw, default)
+    return default
+
+
+def palette_from_theme(theme: Theme) -> Palette:
+    c = theme.colors
+    defaults = {f.name: f.default for f in fields(Palette)}
+
+    accent1 = _pick(c.accent1, defaults["purple"], "accent1")
+    dk1 = _pick(c.dk1, defaults["black"], "dk1")
+    dk2 = _pick(c.dk2, defaults["dark"], "dark")
+    lt1 = _pick(c.lt1, "FFFFFF", "lt1")
+    lt2 = _pick(c.lt2, defaults["border"], "lt2")
+    accent2 = _pick(c.accent2, defaults["amber"], "accent2")
+    accent3 = _pick(c.accent3, defaults["green"], "accent3")
+
+    return Palette(
+        purple=accent1,
+        purple_lt=_lighten(accent1, 0.40),
+        purple_dk=_darken(accent1, 0.20),
+        purple_bg=_lighten(accent1, 0.85),
+        black=dk1,
+        dark=dk2,
+        muted=_midpoint_hsl(dk1, lt1),
+        border=lt2,
+        bg_alt=_lighten(lt1, 0.05),
+        amber=accent2,
+        green=accent3,
+    )
 
 
 def _run(text: str, size_pt: int, bold: bool, color: str, font: str) -> str:
