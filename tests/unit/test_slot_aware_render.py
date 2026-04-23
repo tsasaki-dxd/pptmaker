@@ -123,3 +123,113 @@ def test_flag_on_empty_slots_falls_back_silently(
         render_content_slide(BASE_SLIDE, _req(), slots=[])
     assert capturing_renderer.seen_container == DEFAULT_BODY_AREA
     assert not any(rec.levelno == logging.WARNING for rec in caplog.records)
+
+
+def test_flag_on_text_figure_footer_all_emitted(
+    monkeypatch: pytest.MonkeyPatch, capturing_renderer: _CapturingRenderer
+) -> None:
+    monkeypatch.setenv("FF_SLOT_RENDER", "1")
+    slots = [
+        {"id": "title", "kind": "text", "x": 10, "y": 10, "w": 100, "h": 40},
+        {"id": "body_main", "kind": "figure", "x": 0, "y": 100, "w": 5000, "h": 3000},
+        {"id": "footer", "kind": "text", "x": 20, "y": 4000, "w": 200, "h": 50},
+    ]
+    req = RenderRequest(
+        slide_index=1,
+        layout="content",
+        figure_type="capture",
+        content={
+            "title": "MyTitle",
+            "slots": {"footer": {"text": "FOOTER_TEXT_XYZ"}},
+        },
+    )
+    out = render_content_slide(BASE_SLIDE, req, slots=slots)
+    assert "MyTitle" in out
+    assert capturing_renderer.seen_container is not None
+    assert (
+        capturing_renderer.seen_container.x,
+        capturing_renderer.seen_container.y,
+        capturing_renderer.seen_container.w,
+        capturing_renderer.seen_container.h,
+    ) == (0, 100, 5000, 3000)
+    assert "FOOTER_TEXT_XYZ" in out
+    assert "<p:sp/>" in out
+
+
+def test_flag_on_title_slot_without_title_content_silently_skipped(
+    monkeypatch: pytest.MonkeyPatch, capturing_renderer: _CapturingRenderer
+) -> None:
+    monkeypatch.setenv("FF_SLOT_RENDER", "1")
+    slots = [
+        {"id": "title", "kind": "text", "x": 10, "y": 10, "w": 100, "h": 40},
+    ]
+    req = RenderRequest(
+        slide_index=1,
+        layout="content",
+        figure_type=None,
+        content={},
+    )
+    out = render_content_slide(BASE_SLIDE, req, slots=slots)
+    assert "slot-text-" not in out
+
+
+def test_flag_on_table_slot_skipped_no_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    capturing_renderer: _CapturingRenderer,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("FF_SLOT_RENDER", "1")
+    slots = [
+        {"id": "table_0", "kind": "table", "x": 10, "y": 10, "w": 100, "h": 100},
+    ]
+    req = RenderRequest(
+        slide_index=1,
+        layout="content",
+        figure_type=None,
+        content={"title": "T"},
+    )
+    with caplog.at_level(logging.WARNING, logger="render.layout_renderer"):
+        out = render_content_slide(BASE_SLIDE, req, slots=slots)
+    assert "slot-text-" not in out
+    assert not any(rec.levelno == logging.WARNING for rec in caplog.records)
+
+
+def test_flag_on_image_slot_no_asset_id_skipped(
+    monkeypatch: pytest.MonkeyPatch, capturing_renderer: _CapturingRenderer
+) -> None:
+    monkeypatch.setenv("FF_SLOT_RENDER", "1")
+    slots = [
+        {"id": "image_0", "kind": "image", "x": 10, "y": 10, "w": 500, "h": 500},
+    ]
+    req = RenderRequest(
+        slide_index=1,
+        layout="content",
+        figure_type=None,
+        content={"title": "T", "slots": {"image_0": {"caption": "nope"}}},
+    )
+    out = render_content_slide(BASE_SLIDE, req, slots=slots)
+    assert "img-bg" not in out
+    assert "img-caption" not in out
+
+
+def test_flag_off_full_slots_list_uses_default_body_area(
+    monkeypatch: pytest.MonkeyPatch, capturing_renderer: _CapturingRenderer
+) -> None:
+    monkeypatch.delenv("FF_SLOT_RENDER", raising=False)
+    slots = [
+        {"id": "title", "kind": "text", "x": 10, "y": 10, "w": 100, "h": 40},
+        {"id": "body_main", "kind": "figure", "x": 0, "y": 100, "w": 5000, "h": 3000},
+        {"id": "footer", "kind": "text", "x": 20, "y": 4000, "w": 200, "h": 50},
+    ]
+    req = RenderRequest(
+        slide_index=1,
+        layout="content",
+        figure_type="capture",
+        content={
+            "title": "T",
+            "slots": {"footer": {"text": "FOOTER_TEXT_XYZ"}},
+        },
+    )
+    out = render_content_slide(BASE_SLIDE, req, slots=slots)
+    assert capturing_renderer.seen_container == DEFAULT_BODY_AREA
+    assert "FOOTER_TEXT_XYZ" not in out
