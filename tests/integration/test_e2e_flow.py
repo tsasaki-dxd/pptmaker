@@ -13,6 +13,7 @@ revise blueprint -> request render -> fetch preview/export URLs.
 
 from __future__ import annotations
 
+import json as _json
 import os
 import tempfile
 from unittest.mock import patch
@@ -31,6 +32,11 @@ os.environ["AWS_REGION"] = "us-east-1"
 os.environ["RENDER_QUEUE_URL"] = "https://sqs.us-east-1.amazonaws.com/111111111111/render-test"
 os.environ["BLUEPRINT_QUEUE_URL"] = "https://sqs.us-east-1.amazonaws.com/111111111111/blueprint-test"
 os.environ["ANTHROPIC_API_KEY"] = "test"  # prevents Secrets Manager lookup
+
+# Imported after the env-var setup above so api.config sees the test
+# values (get_settings is lru_cached on first access). Ruff would prefer
+# this up top with the other imports; it can't go there.
+from api.blueprint_worker import handler as _bp_worker  # noqa: E402, I001
 
 
 FAKE_BLUEPRINT_JSON = """
@@ -139,10 +145,6 @@ def test_full_flow(client: TestClient) -> None:
     project_id = project["id"]
 
     # 4. create blueprint job (async). API enqueues + returns 202.
-    import json as _json
-
-    from api.blueprint_worker import handler as _bp_worker
-
     r = client.post(
         f"/api/projects/{project_id}/blueprint",
         json={
@@ -247,9 +249,6 @@ def test_revise_without_blueprint_400(client: TestClient) -> None:
 
 
 def test_duplicate_project_copies_blueprint(client: TestClient) -> None:
-    import json as _json
-    from api.blueprint_worker import handler as _bp_worker
-
     r = client.post("/api/templates", params={"name": "T-dup"})
     template_id = r.json()["template_id"]
     r = client.post("/api/projects", json={"name": "Original", "template_id": template_id})
@@ -279,9 +278,6 @@ def test_duplicate_project_copies_blueprint(client: TestClient) -> None:
 
 
 def test_delete_project_cascades(client: TestClient) -> None:
-    import json as _json
-    from api.blueprint_worker import handler as _bp_worker
-
     r = client.post("/api/templates", params={"name": "T-del"})
     template_id = r.json()["template_id"]
     r = client.post("/api/projects", json={"name": "ToDelete", "template_id": template_id})

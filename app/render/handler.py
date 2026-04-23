@@ -32,7 +32,6 @@ import boto3
 
 from .db_status import update_project_status
 from .layout_renderer import RenderRequest, render_content_slide
-from .preview import pdf_to_jpegs, pptx_to_pdf
 from .pptx_assembler import (
     assign_default_template_indices,
     derive_slides,
@@ -42,6 +41,7 @@ from .pptx_assembler import (
     rewrite_presentation_xml,
     write_output_slides,
 )
+from .preview import pdf_to_jpegs, pptx_to_pdf
 from .template_loader import repack, safe_unpack
 
 log = logging.getLogger("slideforge.render")
@@ -125,7 +125,9 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
         xmls, rels = derive_slides(template_slides, chosen)
 
         skipped: list[int] = []
-        for i, (slide, src_xml) in enumerate(zip(blueprint_slides, xmls), start=1):
+        for i, (slide, src_xml) in enumerate(
+            zip(blueprint_slides, xmls, strict=True), start=1
+        ):
             req = RenderRequest(
                 slide_index=i,
                 layout=slide.get("layout", "content"),

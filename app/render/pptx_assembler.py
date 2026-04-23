@@ -25,9 +25,9 @@ import logging
 import re
 import shutil
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 log = logging.getLogger("slideforge.render.pptx_assembler")
 
@@ -102,7 +102,9 @@ def write_output_slides(
     for f in rels_dir.glob("slide*.xml.rels"):
         f.unlink()
 
-    for i, (xml, rels) in enumerate(zip(slide_xmls, slide_rels), start=1):
+    for i, (xml, rels) in enumerate(
+        zip(slide_xmls, slide_rels, strict=True), start=1
+    ):
         (slides_dir / f"slide{i}.xml").write_text(xml, encoding="utf-8")
         if rels is not None:
             (rels_dir / f"slide{i}.xml.rels").write_text(rels, encoding="utf-8")
