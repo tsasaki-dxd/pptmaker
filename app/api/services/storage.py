@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 import boto3
 from botocore.client import Config
@@ -90,6 +91,33 @@ def generate_image_upload_post(
         ExpiresIn=_IMAGE_UPLOAD_EXPIRES_SECONDS,
     )
     return resp["url"], resp["fields"]
+
+
+def download_bytes(s3_path: str) -> bytes | None:
+    """Fetch an S3 object's bytes. Returns None on 404/missing, raises on other errors.
+
+    Accepts either a plain key (resolved against the configured default
+    bucket) or an ``s3://bucket/key`` URI. Used by the render entry point
+    to hand .pptx bytes to the lazy-slot-migration helper without
+    instantiating the heavier ``Storage`` class.
+    """
+    client, default_bucket = _image_upload_client()
+    if s3_path.startswith("s3://"):
+        parsed = urlparse(s3_path)
+        bucket = parsed.netloc
+        key = parsed.path.lstrip("/")
+    else:
+        bucket = default_bucket
+        key = s3_path
+    try:
+        obj = client.get_object(Bucket=bucket, Key=key)
+        return obj["Body"].read()
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        status = e.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if code in {"404", "NoSuchKey", "NotFound"} or status == 404:
+            return None
+        raise
 
 
 def head_image_object(s3_key: str) -> dict[str, Any] | None:
