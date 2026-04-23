@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from difflib import SequenceMatcher
 from typing import Any, get_args
 
 from pydantic import ValidationError
@@ -16,6 +18,9 @@ MAX_RETRIES = 2
 
 _VALID_FIGURE_TYPES = set(get_args(FigureType))
 _VALID_LAYOUTS = set(get_args(LayoutKind))
+
+_HEADLINE_PLACEHOLDER = "[headline_message 未指定]"
+_HEADLINE_TITLE_OVERLAP_THRESHOLD = 0.70
 
 
 class BlueprintBuildError(Exception):
@@ -103,6 +108,8 @@ def _sanitize(obj: Any) -> None:
 
         # Slot-shaping pass (§4.4): additive, preserves flat fields.
         slides[i - 1] = _apply_slot_sanitize(s)
+        _enforce_headline_message(slides[i - 1])
+        _check_headline_not_title_restate(slides[i - 1])
 
 
 # Keys that identify the figure-data payload for a given figure_type.
@@ -212,6 +219,67 @@ def _apply_slot_sanitize(slide: dict[str, Any]) -> dict[str, Any]:
     new_slide = dict(slide)
     new_slide["content"] = new_content
     return new_slide
+
+
+def _enforce_headline_message(slide: dict[str, Any]) -> None:
+    """Fill missing headline_message with a placeholder when the feature
+    flag is on. Flag-gated so existing blueprints keep loading."""
+    # WHY: flag-gated rollout per Phase 2 §5.5 — never hard-fail.
+    if os.environ.get("FF_HEADLINE_REQUIRED") != "1":
+        return
+    if not isinstance(slide, dict):
+        return
+    value = slide.get("headline_message")
+    if isinstance(value, str) and value.strip():
+        return
+    idx = slide.get("index")
+    log.warning(
+        "slide %s: headline_message missing/blank; inserting placeholder",
+        idx,
+    )
+    slide["headline_message"] = _HEADLINE_PLACEHOLDER
+
+
+def _check_headline_not_title_restate(slide: dict[str, Any]) -> None:
+    """Warn when headline_message is ≥70% overlap with the slide title."""
+    if not isinstance(slide, dict):
+        return
+    headline = slide.get("headline_message")
+    if not isinstance(headline, str) or not headline.strip():
+        return
+    if headline == _HEADLINE_PLACEHOLDER:
+        return
+    content = slide.get("content")
+    title: str | None = None
+    if isinstance(content, dict):
+        slots = content.get("slots")
+        if isinstance(slots, dict):
+            slot_title = slots.get("title")
+            if isinstance(slot_title, dict):
+                t = slot_title.get("text")
+                if isinstance(t, str):
+                    title = t
+        if title is None:
+            t = content.get("title")
+            if isinstance(t, str):
+                title = t
+    if not title or not title.strip():
+        return
+    a = _normalize_for_overlap(headline)
+    b = _normalize_for_overlap(title)
+    if not a or not b:
+        return
+    ratio = SequenceMatcher(a=a, b=b).ratio()
+    if ratio >= _HEADLINE_TITLE_OVERLAP_THRESHOLD:
+        log.warning(
+            "slide %s: headline_message restates title (overlap=%.2f)",
+            slide.get("index"),
+            ratio,
+        )
+
+
+def _normalize_for_overlap(s: str) -> str:
+    return "".join(ch for ch in s.strip() if not ch.isspace())
 
 
 def _validate(obj: Any) -> None:
