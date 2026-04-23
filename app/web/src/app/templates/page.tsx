@@ -45,6 +45,17 @@ export default function TemplatesPage() {
     }
   }
 
+  async function handleDelete(t: TemplateProfile) {
+    if (!window.confirm(`「${t.name}」を削除しますか？この操作は取り消せません。`)) return;
+    try {
+      await api.deleteTemplate(t.id);
+      setStatus(`削除: ${t.name}`);
+      await refresh();
+    } catch (e) {
+      setStatus(`削除失敗: ${String(e)}`);
+    }
+  }
+
   return (
     <section className="space-y-6">
       <div className="space-y-2">
@@ -97,11 +108,19 @@ export default function TemplatesPage() {
             {list.map((t) => (
               <li
                 key={t.id}
-                className="rounded border border-purple-lt/60 bg-white p-3 text-sm"
+                className="flex items-start justify-between gap-3 rounded border border-purple-lt/60 bg-white p-3 text-sm"
               >
-                <div className="font-medium text-dark">{t.name}</div>
-                <div className="font-mono text-xs text-muted">{t.id}</div>
-                <div className="text-xs text-muted">{new Date(t.created_at).toLocaleString('ja-JP')}</div>
+                <div>
+                  <div className="font-medium text-dark">{t.name}</div>
+                  <div className="font-mono text-xs text-muted">{t.id}</div>
+                  <div className="text-xs text-muted">{new Date(t.created_at).toLocaleString('ja-JP')}</div>
+                </div>
+                <button
+                  onClick={() => handleDelete(t)}
+                  className="shrink-0 rounded border border-purple-lt px-3 py-1 text-xs text-dark hover:bg-purple-lt/20"
+                >
+                  削除
+                </button>
               </li>
             ))}
           </ul>

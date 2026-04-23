@@ -61,6 +61,8 @@ export const api = {
       `/api/templates?name=${encodeURIComponent(name)}`,
       { method: 'POST' },
     ),
+  deleteTemplate: (id: string) =>
+    request<{ deleted: string }>(`/api/templates/${id}`, { method: 'DELETE' }),
   /** Upload a .pptx file to a presigned S3 URL returned by createTemplate. */
   uploadTemplateFile: async (uploadUrl: string, file: File): Promise<void> => {
     const res = await fetch(uploadUrl, {
