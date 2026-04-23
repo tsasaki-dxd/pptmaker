@@ -153,3 +153,31 @@ class PreviewResponse(BaseModel):
 class ExportResponse(BaseModel):
     format: Literal["pptx", "pdf"]
     url: str
+
+
+class ImageAssetCreateRequest(BaseModel):
+    mime: Literal["image/png", "image/jpeg", "image/webp"]
+    bytes: int = Field(gt=0, le=10_485_760)  # 10 MB
+
+
+class ImageAssetCreateResponse(BaseModel):
+    asset_id: UUID
+    upload_url: str
+    fields: dict[str, str]  # presigned POST form fields
+
+
+class ImageAssetCommitRequest(BaseModel):
+    checksum_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ImageAsset(BaseModel):
+    id: UUID
+    tenant_id: str
+    project_id: UUID
+    s3_key: str
+    mime: str
+    bytes: int
+    width_px: int | None = None
+    height_px: int | None = None
+    checksum_sha256: str | None = None
+    created_at: datetime
