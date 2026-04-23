@@ -21,6 +21,9 @@ FigureType = Literal[
     "stat_callout",
     "bullet_list",
     "comparison",
+    "matrix_2x2",
+    "swot",
+    "pyramid",
 ]
 
 
