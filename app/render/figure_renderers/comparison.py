@@ -54,7 +54,7 @@ class ComparisonRenderer(FigureRenderer):
                     container.y + 140000,
                     col_w - 400000,
                     420000,
-                    col["title"],
+                    col.get("title", ""),
                     size_pt=13,
                     bold=True,
                     color=accent,
