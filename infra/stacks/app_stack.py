@@ -268,6 +268,27 @@ class AppStack(cdk.Stack):
             dead_letter_queue=sqs.DeadLetterQueue(max_receive_count=3, queue=render_dlq),
         )
 
+        # Blueprint queue: async LLM-call jobs enqueued by the API Lambda
+        # and processed by the blueprint_worker Lambda. Sits alongside
+        # RenderQueue so the ~30s Claude call doesn't run inside the
+        # 30-second HTTP API integration window.
+        blueprint_dlq = sqs.Queue(
+            self,
+            "BlueprintDlq",
+            queue_name=f"slideforge-{stage_name}-blueprint-dlq",
+            retention_period=cdk.Duration.days(14),
+        )
+        self.blueprint_queue = sqs.Queue(
+            self,
+            "BlueprintQueue",
+            queue_name=f"slideforge-{stage_name}-blueprint",
+            # Visibility timeout must be >= worker Lambda timeout (5 min)
+            # to avoid a second delivery while the first is still
+            # legitimately running. Padded a bit for safety.
+            visibility_timeout=cdk.Duration.minutes(6),
+            dead_letter_queue=sqs.DeadLetterQueue(max_receive_count=2, queue=blueprint_dlq),
+        )
+
         self.render_function = lambda_.DockerImageFunction(
             self,
             "RenderFunction",
@@ -303,6 +324,7 @@ class AppStack(cdk.Stack):
         self.db_secret.grant_read(api_role)
         anthropic_secret.grant_read(api_role)
         self.render_queue.grant_send_messages(api_role)
+        self.blueprint_queue.grant_send_messages(api_role)
 
         self.api_function = lambda_.Function(
             self,
@@ -341,10 +363,70 @@ class AppStack(cdk.Stack):
                 "DB_SECRET_ARN": self.db_secret.secret_arn,
                 "DB_ENDPOINT": self.db.instance_endpoint.hostname,
                 "RENDER_QUEUE_URL": self.render_queue.queue_url,
+                "BLUEPRINT_QUEUE_URL": self.blueprint_queue.queue_url,
                 "COGNITO_USER_POOL_ID": self.user_pool.user_pool_id,
                 "COGNITO_CLIENT_ID": self.user_pool_client.user_pool_client_id,
                 "ANTHROPIC_API_KEY_SECRET": anthropic_secret.secret_name,
             },
+        )
+
+        # Blueprint worker Lambda: shares the api/ source asset (same
+        # bundling, same deps) but runs with a different handler and an
+        # SQS trigger. Split from the HTTP API Lambda so it can have a
+        # 5-minute timeout for the LLM call without giving API requests
+        # the same ceiling, and so worker crashes don't poison the HTTP
+        # container's warm pool.
+        blueprint_worker_role = iam.Role(
+            self,
+            "BlueprintWorkerRole",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "service-role/AWSLambdaVPCAccessExecutionRole"
+                )
+            ],
+        )
+        self.db_secret.grant_read(blueprint_worker_role)
+        anthropic_secret.grant_read(blueprint_worker_role)
+        self.blueprint_queue.grant_consume_messages(blueprint_worker_role)
+
+        self.blueprint_worker_function = lambda_.Function(
+            self,
+            "BlueprintWorkerFunction",
+            function_name=f"slideforge-{stage_name}-blueprint-worker",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="api.blueprint_worker.handler",
+            code=lambda_.Code.from_asset(
+                str(REPO_ROOT / "app" / "api"),
+                bundling=cdk.BundlingOptions(
+                    image=lambda_.Runtime.PYTHON_3_12.bundling_image,
+                    command=[
+                        "bash",
+                        "-c",
+                        "pip install --no-cache-dir -r requirements.txt -t /asset-output "
+                        "&& mkdir -p /asset-output/api "
+                        "&& cp -r . /asset-output/api/",
+                    ],
+                ),
+            ),
+            memory_size=1024,
+            timeout=cdk.Duration.minutes(5),
+            role=blueprint_worker_role,
+            vpc=self.vpc,
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS),
+            security_groups=[lambda_sg],
+            environment={
+                "ENV": stage_name,
+                "S3_BUCKET": self.artifacts_bucket.bucket_name,
+                "DB_SECRET_ARN": self.db_secret.secret_arn,
+                "DB_ENDPOINT": self.db.instance_endpoint.hostname,
+                # Cognito not needed — worker is invoked by SQS, never
+                # handles a user token directly.
+                "ANTHROPIC_API_KEY_SECRET": anthropic_secret.secret_name,
+            },
+        )
+        self.blueprint_worker_function.add_event_source(
+            lambda_events.SqsEventSource(self.blueprint_queue, batch_size=1)
         )
 
         # CORS handled at the API Gateway level, not the Lambda. Two reasons:
@@ -387,12 +469,12 @@ class AppStack(cdk.Stack):
             integration=apigw2_integ.HttpLambdaIntegration(
                 "ApiIntegration",
                 handler=self.api_function,
-                # Blueprint generation does a synchronous LLM call that
-                # routinely takes ~30s. The default integration timeout
-                # on HTTP API v2 is 29s, which returns 503 to the client.
-                # 30s is the hard ceiling AWS allows for HTTP APIs —
-                # anything longer would need an async job pattern.
-                timeout=cdk.Duration.seconds(30),
+                # 29s is the CDK-enforced upper bound (AWS docs say the
+                # hard ceiling is 30s, but CDK validates <= 29s on
+                # synth). Bumped from the default because some requests
+                # still run close to the limit; anything longer moved
+                # to the async blueprint worker pattern.
+                timeout=cdk.Duration.seconds(29),
             ),
         )
 

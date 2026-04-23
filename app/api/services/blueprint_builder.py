@@ -14,6 +14,19 @@ log = logging.getLogger("slideforge.blueprint")
 
 MAX_RETRIES = 2
 
+# Figure-type catalog sent to the LLM. Lives here (not in the API
+# router) because the blueprint worker needs it too and pulling it from
+# a router module from a Lambda worker handler is backwards.
+FIGURE_CATALOG = (
+    "- table: 行×列の表、ヘッダ+交互背景。content: {title?, headers, rows}\n"
+    "- cards_grid: 均等カード格子。content: {cards:[{title, body}], columns?}\n"
+    "- two_column: 左右2カラム+任意フッタ。content: {left, right, footer?}\n"
+    "- timeline: 横タイムライン。content: {steps:[{label, body?}]}\n"
+    "- stat_callout: 数値強調。content: {value, label, note?}\n"
+    "- bullet_list: 箇条書き。content: {items:[...]}\n"
+    "- comparison: 左右比較。content: {left:{title, items}, right:{title, items}}\n"
+)
+
 
 class BlueprintBuildError(Exception):
     pass

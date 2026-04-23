@@ -9,10 +9,18 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..auth import require_tenant
-from ..models.db import BlueprintRow, ProjectRow, RevisionRow, TemplateProfileRow, get_session
+from ..models.db import (
+    BlueprintJobRow,
+    BlueprintRow,
+    ProjectRow,
+    RevisionRow,
+    TemplateProfileRow,
+    get_session,
+)
 from ..models.schemas import (
     Blueprint,
     BlueprintCreate,
+    BlueprintJob,
     Project,
     ProjectCreate,
     RenderResponse,
@@ -20,9 +28,8 @@ from ..models.schemas import (
     RevisionCreate,
     SlideSpec,
 )
-from ..services.blueprint_builder import BlueprintBuildError, build_blueprint
 from ..services.llm import LLMClient
-from ..services.queue import RenderQueue
+from ..services.queue import BlueprintQueue, RenderQueue
 from ..services.revision_handler import RevisionError, apply_instruction
 from ..services.storage import Storage
 
@@ -55,18 +62,6 @@ def list_projects(
     ]
 
 
-# Figure-type catalog sent to the blueprint LLM. Kept terse.
-FIGURE_CATALOG = (
-    "- table: 行×列の表、ヘッダ+交互背景。content: {title?, headers, rows}\n"
-    "- cards_grid: 均等カード格子。content: {cards:[{title, body}], columns?}\n"
-    "- two_column: 左右2カラム+任意フッタ。content: {left, right, footer?}\n"
-    "- timeline: 横タイムライン。content: {steps:[{label, body?}]}\n"
-    "- stat_callout: 数値強調。content: {value, label, note?}\n"
-    "- bullet_list: 箇条書き。content: {items:[...]}\n"
-    "- comparison: 左右比較。content: {left:{title, items}, right:{title, items}}\n"
-)
-
-
 @router.post("", response_model=Project)
 def create_project(
     body: ProjectCreate,
@@ -92,51 +87,87 @@ def create_project(
     )
 
 
-@router.post("/{project_id}/blueprint", response_model=Blueprint)
+@router.post(
+    "/{project_id}/blueprint",
+    response_model=BlueprintJob,
+    status_code=202,
+)
 def create_blueprint(
     project_id: str,
     body: BlueprintCreate,
     tenant_id: str = Depends(require_tenant),
     db: Session = Depends(get_session),
-) -> Blueprint:
+) -> BlueprintJob:
+    """Enqueue a blueprint-generation job.
+
+    The LLM call takes ~30s which sits right at the HTTP API v2
+    integration timeout of 30s. Doing it inline would turn into a 503.
+    Instead, persist a BlueprintJobRow, send an SQS message for the
+    blueprint_worker Lambda, and return 202. The client polls
+    GET /blueprint/job/{job_id}.
+    """
     project = _load_project(db, project_id, tenant_id)
-    template = (
-        db.query(TemplateProfileRow)
-        .filter(TemplateProfileRow.id == project.template_id)
-        .one()
-    )
+    # Surface "template deleted" up front instead of letting the worker
+    # find out 10 seconds in.
+    db.query(TemplateProfileRow).filter(
+        TemplateProfileRow.id == project.template_id
+    ).one()
 
-    template_summary = (
-        f"テンプレート名: {template.name}\n"
-        f"S3: {template.original_s3_path}\n"
-        f"レイアウト数: {len(template.layouts)}"
-    )
-
-    llm = LLMClient()
-    try:
-        parsed = build_blueprint(
-            llm=llm,
-            user_intent=body.intent,
-            required_sections=body.required_sections,
-            aux_context=body.aux_context,
-            template_summary=template_summary,
-            figure_catalog=FIGURE_CATALOG,
-        )
-    except BlueprintBuildError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
-
-    row = BlueprintRow(
+    job = BlueprintJobRow(
         id=str(uuid4()),
         project_id=project.id,
-        version=_next_version(db, project.id),
-        title=parsed.get("title", project.name),
-        slides=parsed.get("slides", []),
+        tenant_id=tenant_id,
+        status="pending",
     )
-    db.add(row)
+    db.add(job)
     db.commit()
-    db.refresh(row)
+    db.refresh(job)
 
-    return _to_schema(row)
+    BlueprintQueue().submit(
+        {
+            "job_id": job.id,
+            "project_id": project.id,
+            "tenant_id": tenant_id,
+            "user_intent": body.intent,
+            "required_sections": list(body.required_sections),
+            "aux_context": body.aux_context,
+        }
+    )
+
+    return BlueprintJob(
+        job_id=job.id,
+        project_id=job.project_id,
+        status=job.status,  # "pending"
+        created_at=job.created_at,
+    )
+
+
+@router.get("/{project_id}/blueprint/job/{job_id}", response_model=BlueprintJob)
+def get_blueprint_job(
+    project_id: str,
+    job_id: str,
+    tenant_id: str = Depends(require_tenant),
+    db: Session = Depends(get_session),
+) -> BlueprintJob:
+    row = (
+        db.query(BlueprintJobRow)
+        .filter(
+            BlueprintJobRow.id == job_id,
+            BlueprintJobRow.project_id == project_id,
+            BlueprintJobRow.tenant_id == tenant_id,
+        )
+        .one_or_none()
+    )
+    if not row:
+        raise HTTPException(404, "job not found")
+    return BlueprintJob(
+        job_id=row.id,
+        project_id=row.project_id,
+        status=row.status,  # type: ignore[arg-type]
+        blueprint_id=row.blueprint_id,
+        error=row.error_message,
+        created_at=row.created_at,
+    )
 
 
 @router.get("/{project_id}/blueprint", response_model=Blueprint)

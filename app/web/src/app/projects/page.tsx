@@ -38,8 +38,8 @@ export default function ProjectsPage() {
       const project = await api.createProject(name, templateId);
       push(`project_id = ${project.id}`);
 
-      push('骨格生成中...（LLM 呼び出し、30 秒ほど）');
-      const bp = await api.createBlueprint(
+      push('骨格生成ジョブ投入...');
+      const job = await api.createBlueprint(
         project.id,
         intent,
         sections
@@ -47,7 +47,12 @@ export default function ProjectsPage() {
           .map((s) => s.trim())
           .filter(Boolean),
       );
-      push(`blueprint_id = ${bp.id} (${bp.slides.length} slides, v${bp.version})`);
+      push(`job_id = ${job.job_id} (ポーリング中...)`);
+      const done = await pollBlueprintJob(project.id, job.job_id);
+      if (done.status === 'failed') {
+        throw new Error(`骨格生成に失敗: ${done.error ?? '(詳細不明)'}`);
+      }
+      push(`骨格生成完了: blueprint_id = ${done.blueprint_id}`);
 
       push('レンダリング投入...');
       const r = await api.render(project.id);
@@ -60,6 +65,25 @@ export default function ProjectsPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function pollBlueprintJob(
+    projectId: string,
+    jobId: string,
+  ): Promise<{ status: 'complete' | 'failed'; blueprint_id?: string | null; error?: string | null }> {
+    // Poll every 2s up to 3 minutes. Blueprint worker Lambda has a 5 min
+    // timeout but typical runs are ~30s; 3 min keeps the UI responsive
+    // while leaving room for slow LLM traffic.
+    const intervalMs = 2000;
+    const maxAttempts = 90;
+    for (let i = 0; i < maxAttempts; i++) {
+      const j = await api.getBlueprintJob(projectId, jobId);
+      if (j.status === 'complete' || j.status === 'failed') {
+        return { status: j.status, blueprint_id: j.blueprint_id, error: j.error };
+      }
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    throw new Error('骨格生成がタイムアウトしました（3分経過）');
   }
 
   async function handlePreview(projectId: string, slide = 1) {

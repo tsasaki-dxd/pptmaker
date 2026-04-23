@@ -75,6 +75,28 @@ class OutputRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class BlueprintJobRow(Base):
+    """Async blueprint-generation job.
+
+    Created immediately by POST /api/projects/{id}/blueprint, enqueued to
+    SQS, and picked up by the blueprint_worker Lambda which writes the
+    resulting BlueprintRow and flips status to "complete" (or "failed").
+    The client polls GET /api/projects/{id}/blueprint/job/{job_id}.
+    """
+
+    __tablename__ = "blueprint_jobs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), index=True)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending|complete|failed
+    blueprint_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
 _engine = None
 _SessionLocal = None
 _tables_ready = False
@@ -110,6 +132,15 @@ def get_session():
         yield db
     finally:
         db.close()
+
+
+def new_session():
+    """Plain (non-generator) session for use outside FastAPI's dependency
+    injection. Caller is responsible for commit/rollback/close.
+    """
+    _ensure_tables()
+    assert _SessionLocal is not None
+    return _SessionLocal()
 
 
 def init_db() -> None:
