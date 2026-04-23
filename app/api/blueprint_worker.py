@@ -24,11 +24,7 @@ from .models.db import (
     TemplateProfileRow,
     new_session,
 )
-from .services.blueprint_builder import (
-    FIGURE_CATALOG,
-    BlueprintBuildError,
-    build_blueprint,
-)
+from .services.blueprint_builder import BlueprintBuildError, build_blueprint
 from .services.llm import LLMClient
 
 log = logging.getLogger("slideforge.blueprint_worker")
@@ -104,7 +100,6 @@ def _process(msg: dict[str, Any]) -> None:
                 required_sections=msg.get("required_sections") or [],
                 aux_context=msg.get("aux_context"),
                 template_summary=template_summary,
-                figure_catalog=FIGURE_CATALOG,
             )
         except BlueprintBuildError as e:
             # Validation/LLM-output failure after retries — don't let SQS
