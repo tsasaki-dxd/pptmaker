@@ -100,6 +100,10 @@ def _process(msg: dict[str, Any]) -> None:
                     template.template_slide_count = a.slide_count
                 if a.layouts:
                     template.layouts = a.layouts
+                if a.design_tokens:
+                    merged = dict(template.design_tokens or {})
+                    merged.update(a.design_tokens)
+                    template.design_tokens = merged
                 db.commit()
 
         template_summary = (

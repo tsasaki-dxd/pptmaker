@@ -429,6 +429,7 @@ def render(
         "template_s3": template.original_s3_path,
         "blueprint": {"title": bp.title, "slides": bp.slides},
         "template_layouts": list(template.layouts or []),
+        "design_tokens": dict(template.design_tokens or {}),
         "out_prefix": storage.as_uri(out_prefix),
     }
     RenderQueue().submit(job)

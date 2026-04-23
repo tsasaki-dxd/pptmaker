@@ -25,8 +25,38 @@ from .shapes import (
 from .theme_loader import ThemeParseError, load_theme
 
 DEFAULT_BODY_AREA = EMUBox(x=inch(0.5), y=inch(1.6), w=inch(12.3), h=inch(5.4))
+_BODY_AREA_4_3 = EMUBox(x=inch(0.4), y=inch(1.3), w=inch(9.2), h=inch(5.9))
+_SLIDE_CX_16_9 = 12192000
+_SLIDE_CY_16_9 = 6858000
+_SLIDE_CX_4_3 = 9144000
 
 _logger = logging.getLogger(__name__)
+
+
+def default_body_area_for(slide_size: tuple[int, int] | None) -> EMUBox:
+    """Return a reasonable body area for the given slide size.
+
+    16:9 uses the legacy DEFAULT_BODY_AREA. 4:3 uses proportionally
+    adjusted margins that fit the narrower canvas. Other ratios scale
+    from the 16:9 baseline relative to the slide cx/cy.
+    """
+    if slide_size is None:
+        return DEFAULT_BODY_AREA
+    cx, cy = slide_size
+    if cx <= 0 or cy <= 0:
+        return DEFAULT_BODY_AREA
+    if abs(cx - _SLIDE_CX_16_9) <= 1000 and abs(cy - _SLIDE_CY_16_9) <= 1000:
+        return DEFAULT_BODY_AREA
+    if abs(cx - _SLIDE_CX_4_3) <= 1000:
+        return _BODY_AREA_4_3
+    sx = cx / _SLIDE_CX_16_9
+    sy = cy / _SLIDE_CY_16_9
+    return EMUBox(
+        x=int(DEFAULT_BODY_AREA.x * sx),
+        y=int(DEFAULT_BODY_AREA.y * sy),
+        w=int(DEFAULT_BODY_AREA.w * sx),
+        h=int(DEFAULT_BODY_AREA.h * sy),
+    )
 
 
 def _slot_render_enabled() -> bool:
@@ -342,6 +372,7 @@ def render_content_slide(
     start_shape_id: int = 1000,
     slots: list[dict] | None = None,
     theme_pptx_bytes: bytes | None = None,
+    slide_size: tuple[int, int] | None = None,
 ) -> str:
     """Return updated slide XML with:
       1. Title placeholder text replaced.
@@ -356,6 +387,15 @@ def render_content_slide(
     <p:ph> so the stripper leaves them alone.
     """
     out = slide_xml
+
+    if slide_size is not None and req.body_area == DEFAULT_BODY_AREA:
+        req = RenderRequest(
+            slide_index=req.slide_index,
+            layout=req.layout,
+            figure_type=req.figure_type,
+            content=req.content,
+            body_area=default_body_area_for(slide_size),
+        )
 
     title = req.content.get("title")
     if title:

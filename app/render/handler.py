@@ -62,6 +62,7 @@ class RenderJob:
     blueprint: dict[str, Any]
     out_prefix: str
     template_layouts: list[dict[str, Any]] = field(default_factory=list)
+    design_tokens: dict[str, Any] = field(default_factory=dict)
 
 
 def handler(event: dict[str, Any], _context: Any) -> dict[str, Any]:
@@ -112,7 +113,23 @@ def _parse_job(payload: dict[str, Any]) -> RenderJob:
         blueprint=payload["blueprint"],
         out_prefix=payload["out_prefix"],
         template_layouts=list(payload.get("template_layouts") or []),
+        design_tokens=dict(payload.get("design_tokens") or {}),
     )
+
+
+def _slide_size_from_tokens(
+    design_tokens: dict[str, Any],
+) -> tuple[int, int] | None:
+    entry = design_tokens.get("slide_size") if design_tokens else None
+    if not isinstance(entry, dict):
+        return None
+    cx = entry.get("cx_emu")
+    cy = entry.get("cy_emu")
+    if not isinstance(cx, int) or not isinstance(cy, int):
+        return None
+    if cx <= 0 or cy <= 0:
+        return None
+    return cx, cy
 
 
 def _process_job(job: RenderJob) -> dict[str, Any]:
@@ -146,6 +163,7 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
 
         layout_by_index = _index_layouts(job.template_layouts)
         registry = MediaRegistry()
+        slide_size = _slide_size_from_tokens(job.design_tokens)
 
         skipped: list[int] = []
         for i, (slide, src_xml) in enumerate(
@@ -166,6 +184,7 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
                     start_shape_id=1000 + 100 * i,
                     slots=slots,
                     theme_pptx_bytes=theme_bytes,
+                    slide_size=slide_size,
                 )
             except Exception:
                 # Leave the unmodified template XML in place for this

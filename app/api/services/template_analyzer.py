@@ -16,7 +16,7 @@ import logging
 import re
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -36,12 +36,16 @@ from .template_registry import classify_layouts
 log = logging.getLogger("slideforge.template_analyzer")
 
 
+_DEFAULT_SLIDE_SIZE_16_9: dict[str, int] = {"cx_emu": 12192000, "cy_emu": 6858000}
+
+
 @dataclass
 class TemplateAnalysis:
     slide_count: int
     # [{"index": 1, "layout": "cover", "confidence": 0.95, "reason": "...",
     #   "slots": [...], "fixed_elements": [...]}, ...]
     layouts: list[dict]
+    design_tokens: dict[str, Any] = field(default_factory=dict)
 
 
 def _fetch_pptx(s3_uri: str) -> bytes | None:
@@ -79,6 +83,38 @@ def _fixed_to_dict(fixed: FixedElement) -> dict[str, Any]:
         "rect": _rect_to_dict(fixed.rect),
         "element_type": fixed.element_type,
     }
+
+
+def _extract_slide_size(pptx_bytes: bytes) -> tuple[int, int] | None:
+    """Parse ``ppt/presentation.xml`` and return ``(cx_emu, cy_emu)``.
+
+    Returns None if the entry is missing, the XML is malformed, or the
+    ``<p:sldSz>`` element / its ``cx``/``cy`` attributes are absent.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(pptx_bytes)) as zf:
+            try:
+                xml = zf.read("ppt/presentation.xml")
+            except KeyError:
+                return None
+    except (zipfile.BadZipFile, OSError):
+        return None
+    m = re.search(rb"<p:sldSz\b([^/>]*)/?>", xml)
+    if not m:
+        return None
+    attrs = m.group(1)
+    cx_match = re.search(rb'cx="(\d+)"', attrs)
+    cy_match = re.search(rb'cy="(\d+)"', attrs)
+    if not cx_match or not cy_match:
+        return None
+    try:
+        cx = int(cx_match.group(1))
+        cy = int(cy_match.group(1))
+    except ValueError:
+        return None
+    if cx <= 0 or cy <= 0:
+        return None
+    return cx, cy
 
 
 def _extract_slot_metadata(body: bytes) -> dict[int, dict[str, list[dict[str, Any]]]]:
@@ -152,7 +188,19 @@ def analyze_template(s3_uri: str) -> TemplateAnalysis | None:
     except Exception:
         log.exception("classify_layouts failed for %s", s3_uri)
 
-    return TemplateAnalysis(slide_count=slide_count, layouts=layouts)
+    size = _extract_slide_size(body)
+    if size is None:
+        log.debug("slide size not found in %s; defaulting to 16:9", s3_uri)
+        slide_size_tokens = dict(_DEFAULT_SLIDE_SIZE_16_9)
+    else:
+        slide_size_tokens = {"cx_emu": size[0], "cy_emu": size[1]}
+    design_tokens: dict[str, Any] = {"slide_size": slide_size_tokens}
+
+    return TemplateAnalysis(
+        slide_count=slide_count,
+        layouts=layouts,
+        design_tokens=design_tokens,
+    )
 
 
 def count_template_slides(s3_uri: str) -> int:
