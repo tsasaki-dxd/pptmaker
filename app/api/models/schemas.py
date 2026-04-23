@@ -76,6 +76,18 @@ class BlueprintCreate(BaseModel):
     mode: Literal["freeform", "structured", "import"] = "freeform"
 
 
+BlueprintJobStatus = Literal["pending", "complete", "failed"]
+
+
+class BlueprintJob(BaseModel):
+    job_id: UUID
+    project_id: UUID
+    status: BlueprintJobStatus
+    blueprint_id: UUID | None = None
+    error: str | None = None
+    created_at: datetime | None = None
+
+
 class RevisionCreate(BaseModel):
     instruction: str = Field(min_length=1, max_length=2000)
 

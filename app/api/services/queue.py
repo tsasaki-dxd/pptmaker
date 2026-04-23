@@ -1,9 +1,10 @@
-"""SQS submission for Render jobs."""
+"""SQS submission for Render + Blueprint jobs."""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 import boto3
@@ -24,6 +25,23 @@ class RenderQueue:
             return ""
         resp = self.sqs.send_message(
             QueueUrl=self.settings.render_queue_url,
+            MessageBody=json.dumps(job, ensure_ascii=False),
+        )
+        return resp["MessageId"]
+
+
+class BlueprintQueue:
+    def __init__(self) -> None:
+        self.settings = get_settings()
+        self.sqs = boto3.client("sqs", region_name=self.settings.aws_region)
+        self.queue_url = os.environ.get("BLUEPRINT_QUEUE_URL", "")
+
+    def submit(self, job: dict[str, Any]) -> str:
+        if not self.queue_url:
+            log.warning("blueprint queue URL not configured; job not submitted")
+            return ""
+        resp = self.sqs.send_message(
+            QueueUrl=self.queue_url,
             MessageBody=json.dumps(job, ensure_ascii=False),
         )
         return resp["MessageId"]

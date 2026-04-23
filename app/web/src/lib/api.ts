@@ -52,6 +52,17 @@ export interface Blueprint {
   created_at: string;
 }
 
+export type BlueprintJobStatus = 'pending' | 'complete' | 'failed';
+
+export interface BlueprintJob {
+  job_id: string;
+  project_id: string;
+  status: BlueprintJobStatus;
+  blueprint_id?: string | null;
+  error?: string | null;
+  created_at?: string | null;
+}
+
 export const api = {
   health: () => request<{ status: string }>('/health'),
   listTemplates: () => request<TemplateProfile[]>('/api/templates'),
@@ -82,10 +93,12 @@ export const api = {
       body: JSON.stringify({ name, template_id }),
     }),
   createBlueprint: (project_id: string, intent: string, required_sections: string[]) =>
-    request<Blueprint>(`/api/projects/${project_id}/blueprint`, {
+    request<BlueprintJob>(`/api/projects/${project_id}/blueprint`, {
       method: 'POST',
       body: JSON.stringify({ intent, required_sections, mode: 'freeform' }),
     }),
+  getBlueprintJob: (project_id: string, job_id: string) =>
+    request<BlueprintJob>(`/api/projects/${project_id}/blueprint/job/${job_id}`),
   getBlueprint: (project_id: string) => request<Blueprint>(`/api/projects/${project_id}/blueprint`),
   revise: (project_id: string, instruction: string) =>
     request<{ id: string; patch: unknown[] }>(`/api/projects/${project_id}/revise`, {

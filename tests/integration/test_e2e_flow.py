@@ -29,6 +29,7 @@ os.environ["DB_URL"] = f"sqlite:///{_DB_FILE_PATH}"
 os.environ["S3_BUCKET"] = "test-bucket"
 os.environ["AWS_REGION"] = "us-east-1"
 os.environ["RENDER_QUEUE_URL"] = "https://sqs.us-east-1.amazonaws.com/111111111111/render-test"
+os.environ["BLUEPRINT_QUEUE_URL"] = "https://sqs.us-east-1.amazonaws.com/111111111111/blueprint-test"
 os.environ["ANTHROPIC_API_KEY"] = "test"  # prevents Secrets Manager lookup
 
 
@@ -137,7 +138,11 @@ def test_full_flow(client: TestClient) -> None:
     project = r.json()
     project_id = project["id"]
 
-    # 4. create blueprint (LLM mocked)
+    # 4. create blueprint job (async). API enqueues + returns 202.
+    import json as _json
+
+    from api.blueprint_worker import handler as _bp_worker
+
     r = client.post(
         f"/api/projects/{project_id}/blueprint",
         json={
@@ -146,16 +151,32 @@ def test_full_flow(client: TestClient) -> None:
             "mode": "freeform",
         },
     )
+    assert r.status_code == 202, r.text
+    job = r.json()
+    assert job["status"] == "pending"
+    assert job["blueprint_id"] is None
+    job_id = job["job_id"]
+
+    # Drive the worker directly — SQS is a fake in this test, so nothing
+    # would pick the message up otherwise.
+    bp_msg = _json.loads(_FAKE_SQS.messages[-1]["MessageBody"])
+    _bp_worker({"Records": [{"body": _json.dumps(bp_msg)}]}, None)
+
+    # Poll the job: worker just ran, so it should already be complete.
+    r = client.get(f"/api/projects/{project_id}/blueprint/job/{job_id}")
     assert r.status_code == 200, r.text
-    bp = r.json()
-    assert bp["version"] == 1
-    assert bp["title"].startswith("DX")
-    assert len(bp["slides"]) == 3
+    done = r.json()
+    assert done["status"] == "complete", done
+    assert done["blueprint_id"]
 
     # 5. get latest blueprint
     r = client.get(f"/api/projects/{project_id}/blueprint")
     assert r.status_code == 200, r.text
-    assert r.json()["id"] == bp["id"]
+    bp = r.json()
+    assert bp["id"] == done["blueprint_id"]
+    assert bp["version"] == 1
+    assert bp["title"].startswith("DX")
+    assert len(bp["slides"]) == 3
 
     # 6. revise (patch via LLM mock)
     r = client.post(
@@ -174,12 +195,13 @@ def test_full_flow(client: TestClient) -> None:
     assert latest["version"] == 2
 
     # 7. request render (queued via SQS stub)
+    sqs_before = len(_FAKE_SQS.messages)
     r = client.post(f"/api/projects/{project_id}/render")
     assert r.status_code == 200, r.text
     rj = r.json()
     assert rj["status"] == "queued"
     assert rj["blueprint_id"] == latest["id"]
-    assert len(_FAKE_SQS.messages) == 1
+    assert len(_FAKE_SQS.messages) == sqs_before + 1
 
     # 8. preview URL (S3 presigned)
     r = client.get(f"/api/projects/{project_id}/preview/1")
