@@ -277,6 +277,15 @@ def render(
         "out_prefix": storage.as_uri(out_prefix),
     }
     RenderQueue().submit(job)
+
+    # Flip the project out of "draft" so the UI can distinguish projects
+    # whose render has at least been requested from ones that have
+    # literally never been touched. (Proper "complete" transition
+    # requires the render Lambda to write back; tracked separately.)
+    if project.status == "draft":
+        project.status = "rendering"
+        db.commit()
+
     log.info("render job submitted project=%s blueprint=%s", project.id, bp.id)
 
     return RenderResponse(job_id=job["job_id"], blueprint_id=bp.id, status="queued")

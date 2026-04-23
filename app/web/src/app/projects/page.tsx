@@ -189,26 +189,32 @@ export default function ProjectsPage() {
                   <span className="ml-2 rounded bg-purple-lt/40 px-2 py-0.5 text-xs">{p.status}</span>
                 </div>
                 <div className="font-mono text-xs text-muted">{p.id}</div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handlePreview(p.id, 1)}
-                    className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20"
-                  >
-                    プレビュー(1)
-                  </button>
-                  <button
-                    onClick={() => handleExport(p.id, 'pptx')}
-                    className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20"
-                  >
-                    .pptx
-                  </button>
-                  <button
-                    onClick={() => handleExport(p.id, 'pdf')}
-                    className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20"
-                  >
-                    .pdf
-                  </button>
-                </div>
+                {p.status === 'draft' ? (
+                  <div className="text-xs text-muted">
+                    まだレンダリングされていません。上のフォームから実行してください。
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handlePreview(p.id, 1)}
+                      className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20"
+                    >
+                      プレビュー(1)
+                    </button>
+                    <button
+                      onClick={() => handleExport(p.id, 'pptx')}
+                      className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20"
+                    >
+                      .pptx
+                    </button>
+                    <button
+                      onClick={() => handleExport(p.id, 'pdf')}
+                      className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20"
+                    >
+                      .pdf
+                    </button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
