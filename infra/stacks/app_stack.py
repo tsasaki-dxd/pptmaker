@@ -121,6 +121,14 @@ class AppStack(cdk.Stack):
         # gives the API Lambda internet egress. Costs ~3,500 JPY/month,
         # which we absorb as a Phase 1 trade-off for actually being able to
         # call Claude.
+        #
+        # Subnet plan (non-destructive upgrade from the original isolated-only
+        # layout): keep `isolated` so RDS doesn't have to move (data stays),
+        # ADD `private` (PRIVATE_WITH_EGRESS) on fresh CIDR slots for the
+        # Lambda to live in. Without keeping isolated, CDK would try to give
+        # the new private subnets the same CIDRs as the existing isolated
+        # ones (10.0.2.0/24, 10.0.3.0/24) and CFN aborts with
+        # "The CIDR ... conflicts with another subnet".
         self.vpc = ec2.Vpc(
             self,
             "Vpc",
@@ -130,6 +138,11 @@ class AppStack(cdk.Stack):
                 ec2.SubnetConfiguration(
                     name="public",
                     subnet_type=ec2.SubnetType.PUBLIC,
+                    cidr_mask=24,
+                ),
+                ec2.SubnetConfiguration(
+                    name="isolated",
+                    subnet_type=ec2.SubnetType.PRIVATE_ISOLATED,
                     cidr_mask=24,
                 ),
                 ec2.SubnetConfiguration(
@@ -189,7 +202,10 @@ class AppStack(cdk.Stack):
             ),
             instance_type=ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.SMALL),
             vpc=self.vpc,
-            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS),
+            # Keep RDS in the existing isolated subnet so the in-place CFN
+            # update doesn't try to recreate it (would also lose the data).
+            # RDS doesn't need internet anyway.
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_ISOLATED),
             security_groups=[rds_sg],
             multi_az=False,
             allocated_storage=20,
