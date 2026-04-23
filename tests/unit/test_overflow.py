@@ -5,6 +5,7 @@ from render.qa.overflow import (
     check_grid_alignment,
     check_shape_collisions,
     check_slot_bounds,
+    estimate_text_overflow,
 )
 
 SLIDE_WIDTH_EMU = 12192000
@@ -132,3 +133,47 @@ def test_small_offset_within_default_tolerance() -> None:
     offset = int(GRID_UNIT * 0.05)
     shape = Rect(x=GRID_UNIT * 2 + offset, y=0, w=GRID_UNIT * 4, h=500)
     assert check_grid_alignment("s1", shape, SLIDE_WIDTH_EMU) == []
+
+
+def test_short_text_fits_returns_empty() -> None:
+    frame = Rect(x=0, y=0, w=3_000_000, h=500_000)
+    assert estimate_text_overflow("t1", "Hello", frame, font_size_pt=18.0) == []
+
+
+def test_long_japanese_text_overflows() -> None:
+    frame = Rect(x=0, y=0, w=2_000_000, h=500_000)
+    text = "あ" * 200
+    violations = estimate_text_overflow("t1", text, frame, font_size_pt=18.0)
+    assert len(violations) == 1
+    v = violations[0]
+    assert v.kind == "text_overflow"
+    assert v.severity == "warn"
+    assert v.shape_id == "t1"
+    assert "frame.h 500000" in v.detail
+
+
+def test_mixed_en_ja_width_sanity() -> None:
+    fits_frame = Rect(x=0, y=0, w=4_000_000, h=500_000)
+    assert estimate_text_overflow("t1", "Hello 世界", fits_frame, font_size_pt=18.0) == []
+
+    overflow_frame = Rect(x=0, y=0, w=2_000_000, h=500_000)
+    long_mixed = ("Hello 世界 " * 40).strip()
+    violations = estimate_text_overflow("t2", long_mixed, overflow_frame, font_size_pt=18.0)
+    assert len(violations) == 1
+    assert violations[0].kind == "text_overflow"
+
+
+def test_explicit_newlines_force_overflow() -> None:
+    frame = Rect(x=0, y=0, w=5_000_000, h=500_000)
+    text = "Hello\nWorld\nAgain"
+    violations = estimate_text_overflow("t1", text, frame, font_size_pt=18.0)
+    assert len(violations) == 1
+    v = violations[0]
+    assert v.kind == "text_overflow"
+    assert v.severity == "warn"
+    assert "3 lines" in v.detail
+
+
+def test_empty_string_returns_empty() -> None:
+    frame = Rect(x=0, y=0, w=1_000_000, h=1_000_000)
+    assert estimate_text_overflow("t1", "", frame, font_size_pt=18.0) == []
