@@ -42,6 +42,28 @@ tests skip cleanly when Pillow is missing.
 ## Dependencies
 
 - **Pillow** — required for the SSIM helper (`pip install Pillow`).
-- **LibreOffice** + **`pdftoppm`** (from `poppler-utils`) — required for
-  the real PPTX → PNG pipeline. Not scaffolded in this round; add a
-  renderer module alongside the first real golden case.
+- **LibreOffice** (`soffice` binary) — required for the real PPTX → PDF
+  step. On Debian/Ubuntu: `apt-get install -y libreoffice`.
+- **`pdftoppm`** from **poppler-utils** — required for the PDF → PNG
+  step. On Debian/Ubuntu: `apt-get install -y poppler-utils`.
+- **python-pptx** — only needed when tests synthesise a fixture PPTX
+  (`pip install python-pptx`); tests skip gracefully when absent.
+
+The real renderer lives in `app/render/qa/pptx_to_png.py` and exposes
+`render_pptx_to_pngs(pptx_bytes, *, dpi=150, timeout_s=60)`. It raises
+`PptxRenderUnavailable` if either binary is missing or the subprocess
+times out, so suites can skip cleanly on developer laptops.
+
+### Docker image hint
+
+For CI, use an image that ships both dependencies, e.g. a thin layer on
+top of `python:3.12-slim`:
+
+```Dockerfile
+FROM python:3.12-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libreoffice poppler-utils \
+ && rm -rf /var/lib/apt/lists/*
+```
+
+Alternatively `linuxserver/libreoffice` plus `poppler-utils` also works.
