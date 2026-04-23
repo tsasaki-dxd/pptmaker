@@ -11,7 +11,6 @@ from fastapi import FastAPI
 from mangum import Mangum
 
 from .config import get_settings
-from .models.db import init_db
 from .routers import projects, templates
 
 logging.basicConfig(
@@ -29,17 +28,11 @@ app.include_router(templates.router)
 app.include_router(projects.router)
 
 
-@app.on_event("startup")
-def _startup() -> None:
-    # `create_all` is idempotent — no-op if tables already exist.
-    # Safe to run on every Lambda cold start.
-    try:
-        init_db()
-    except Exception as e:
-        # Don't let a transient DB issue keep the whole Lambda from coming
-        # up; log loudly and let the first actual request surface the
-        # error with CORS headers attached.
-        logging.getLogger("slideforge.startup").exception("init_db failed: %s", e)
+# Schema creation happens lazily inside db.get_session() on the first
+# DB-touching request. Doing it in a startup hook used to hide errors
+# behind a try/except (a Lambda that couldn't reach RDS at boot would
+# come up anyway, then 500 every query with "relation does not exist").
+# Lazy + propagate means the actual traceback reaches CloudWatch.
 
 
 @app.get("/health")

@@ -30,8 +30,19 @@ def _jwks() -> dict[str, Any]:
         f"https://cognito-idp.{s.aws_region}.amazonaws.com/"
         f"{s.cognito_user_pool_id}/.well-known/jwks.json"
     )
-    with urllib.request.urlopen(url, timeout=5) as resp:
-        return json.loads(resp.read())
+    # Convert network failures into a 503 instead of a bare uncaught
+    # URLError/timeout. Otherwise a NAT hiccup between the Lambda and
+    # the Cognito IdP endpoint surfaces to the browser as a cryptic 500
+    # with no body. lru_cache only caches successful returns, so a
+    # transient failure will be re-attempted on the next request.
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            f"cannot reach Cognito JWKS: {e}",
+        ) from e
 
 
 def verify_token(token: str) -> dict[str, Any]:
