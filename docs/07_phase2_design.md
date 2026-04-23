@@ -280,6 +280,7 @@ SlideSpec:
   layout: "content"
   template_slide_index: 4
   figure_type: "table"
+  headline_message: "準委任契約により、5月1日以降は開発工数ベースで継続支援する。"
   content:
     slots:
       title:     { "text":   "ご依頼事項と契約形態" }
@@ -289,6 +290,8 @@ SlideSpec:
                                            ["開始日","2026-05-01"]] } }
       footnote:  { "text":   "※ 2026年4月時点" }
 ```
+
+**`headline_message` は §3.2 のコンサルスタイル規範「1 スライド 1 メッセージ」を実装に反映するために新設する必須フィールド**である。従来 `title` に押し込まれがちだった「結論文」を title から分離し、完結した叙述文（主語＋述語、1〜2 行、体言止め禁止）として扱う。レンダ側は slot `headline` が定義されているテンプレではそこに、無ければ title 直上に 1 帯を描画する（描画仕様は §4.3 の fallback 経路に準ずる）。LLM 出力スキーマとバリデーション規則は §5.5 で規定し、`tests/integration/test_headline_required.py` で三層（入力・DB・描画）の必須性を担保する。
 
 LLM からの出力は従来のフラットな `content`（`title`/`bullets`/`table` 等が
 トップレベルに並ぶ形）も許容する。フラット形式を v1.1 の slot 形式に変換する
@@ -512,6 +515,17 @@ FigureType = cast(type, Literal[_types])  # 実体は Literal[...], 静的型は
 - 配置先: `evals/cases/figure_{figure_type}_{01,02}.yaml`。
 - 各ケースは `(input_spec, expected_blueprint, expected_render_pass)` の 3 点組を含む。
 - CI では `pytest evals/` がこの YAML を読み、Blueprint 生成 → validate() → render() の三段で回帰を見る。`expected_render_pass = true` のものは実際に PNG を生成して画素誤差 ≤ 1% を確認する。
+
+加えて、§3.2 で導入したコンサルスタイル規範を LLM プロンプトに正式ルールとして組み込む（`docs/01_prompt_engineering.md` §4 のテンプレ更新と連動）。
+
+**プロンプト強化ルール（新規）**
+
+- **`headline_message` 必須化**: §4.4 で新設した `SlideSpec.headline_message` を LLM 出力スキーマに必須フィールドとして反映する。2 段階バリデーション:
+  1. 構造検証 — 完結した叙述文（主語＋述語を含み、句点で終わる、1〜2 行、体言止め禁止）。
+  2. 内容検証 — `slots.title` のテキストと 70% 以上一致する場合（単なるタイトル再記述）は reject。
+- **SCR 構造のヒント注入**: スライドが根拠と結論を伴う場合、`body_main` slot の組み立てを「Situation（前提）→ Complication（論点）→ Resolution（結論）」順で誘導する。SCR を別 slot に機械分解するのではなく、単一スライド内の論理展開として LLM に指示する。
+- **密度と抑制のバランス**: 1 スライド内の `figure_type` は 1 種類までとし、`table` と `stat_callout` の併置などを禁止する。コンサルスタイルの「visual 抑制」を強制する。
+- **Eval 追加**: 上記 3 ルールの違反例・適合例を `evals/cases/headline_*.yaml` / `evals/cases/scr_*.yaml` / `evals/cases/density_*.yaml` に各最低 3 ケース追加する。
 
 ### 5.6 受入条件（本節のみ）
 
@@ -950,6 +964,7 @@ Overflow は以下の 3 種類に分類する。
 1. **Slot overflow**: shape rect が slot rect を超過する（`x + cx > slot.x + slot.cx` など）。L2 で rect 計算のみで判定可能。
 2. **Text overflow**: LibreOffice レンダ後、text frame の内容が frame 高さを超過する。autoshrink off 前提。静的に厳密判定は不可能なので **L3 で最終判定**し、L2 ではヒューリスティクスで `suspicious` 警告のみ出す。
 3. **Shape collision**: 非 fixed な shape 同士の rect 重なり。ロゴ・ヘッダ等の `fixed_elements` は除外する。
+4. **Grid alignment violation**: §3.2 のコンサルスタイル規範「grid の規律」を静的に強制する。`grid_unit_emu = slide_width_emu / 12` を基準線とし、slot.rect.x / rect.y がこのグリッドから ±0.1 × grid_unit 以上ずれる場合に検出する。Phase 2.5 では **Warn**（テンプレ起因で誤検出が出やすいため）、社内 3 テンプレで誤検出ゼロを確認したのち Phase 3 で Fail に昇格する。
 
 実装は `app/render/qa/overflow.py` に集約する。
 
@@ -987,6 +1002,7 @@ def estimate_text_overflow(
 | Shape collision | L2 静的 | Fail |
 | Text overflow (static estimate) | L2 ヒューリスティクス | Warn |
 | Text overflow (rendered) | L3 ピクセル | Fail |
+| Grid alignment | L2 静的 | Warn（Phase 2.5）→ Fail（Phase 3 以降） |
 
 ### 8.4 L3 Golden-file diff
 
@@ -1210,7 +1226,7 @@ L2 / L3 QA とゴールデン運用、CI 組込み。全マイルストーンの
 
 ## 10. 受入基準
 
-Phase 2 完了判定は以下 7 条件の全充足とする。引き継ぎメモの 4 条件を正式化し、回帰・画像・テーマの実装条件を追加した。
+Phase 2 完了判定は以下 9 条件の全充足とする。引き継ぎメモの 4 条件を正式化し、回帰・画像・テーマの実装条件に加え、§3.2 のコンサルスタイル規範（headline_message / grid alignment）の実装条件を含めた。
 
 > **Phase 2 完了条件** — 15 スライド blueprint でテンプレ 6 ページを slot 指定どおりに使い切り、placeholder テキスト非露出、4:3 / 16:9 両対応、テーマ色継承。
 
@@ -1223,6 +1239,8 @@ Phase 2 完了判定は以下 7 条件の全充足とする。引き継ぎメモ
 | 5 | テーマ色継承が効いている（紫以外で色が変わる） | `tests/integration/test_theme_inheritance.py`: theme.xml から抽出した accent1 / accent2 の値が出力 `solidFill` に現れる | CI（PR ごと） |
 | 6 | 既存 7 figure_type のバイナリ互換が保たれる | `tests/golden/phase1/` に対する pixel diff 0 の回帰テスト | CI（PR ごと） |
 | 7 | 画像 slot cover / contain / fill / fit_width が正しく動く | §6.5 golden 4 ケース（SSIM ≥ 0.98）+ アスペクト計算ユニットテスト | nightly + リリース前手動 |
+| 8 | `SlideSpec.headline_message` が三層（LLM 出力スキーマ・DB・描画）で必須扱いになる | `tests/integration/test_headline_required.py`: 欠落 / タイトル再記述 / 体言止め のいずれも 422、既存 blueprint は migration 時に自動補完または warning | CI（PR ごと） |
+| 9 | Grid alignment 警告が機能する | `tests/unit/test_grid_alignment.py`: 12 カラム基準線から逸脱する slot を含むテンプレで §8.3 の Warn がレポートに現れ、整合するテンプレでは出現しない | CI（PR ごと） |
 
 **追加の非機能条件**
 - p95 レンダリング時間が Phase 1 比 +20 % 以内（slot 解決・theme 解決のオーバヘッド）
