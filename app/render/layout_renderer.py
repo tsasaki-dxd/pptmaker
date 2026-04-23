@@ -7,6 +7,8 @@ shape XML produced by the figure renderer, and updates title text.
 
 from __future__ import annotations
 
+import logging
+import os
 import re
 from dataclasses import dataclass
 
@@ -15,6 +17,31 @@ from .figure_renderers.base import EMUBox, RenderContext
 from .shapes import DEFAULT_FONT, DEFAULT_PALETTE, Palette, inch
 
 DEFAULT_BODY_AREA = EMUBox(x=inch(0.5), y=inch(1.6), w=inch(12.3), h=inch(5.4))
+
+_logger = logging.getLogger(__name__)
+
+
+def _slot_render_enabled() -> bool:
+    return os.environ.get("FF_SLOT_RENDER", "0") == "1"
+
+
+def _pick_figure_slot(slots: list[dict]) -> dict | None:
+    figure_slots = [s for s in slots if s.get("kind") == "figure"]
+    if not figure_slots:
+        return None
+    return max(
+        figure_slots,
+        key=lambda s: int(s.get("w", 0)) * int(s.get("h", 0)),
+    )
+
+
+def _slot_to_box(slot: dict) -> EMUBox:
+    return EMUBox(
+        x=int(slot["x"]),
+        y=int(slot["y"]),
+        w=int(slot["w"]),
+        h=int(slot["h"]),
+    )
 
 
 @dataclass
@@ -32,6 +59,7 @@ def render_content_slide(
     palette: Palette = DEFAULT_PALETTE,
     font: str = DEFAULT_FONT,
     start_shape_id: int = 1000,
+    slots: list[dict] | None = None,
 ) -> str:
     """Return updated slide XML with:
       1. Title placeholder text replaced.
@@ -58,7 +86,17 @@ def render_content_slide(
         if not vr.ok:
             raise ValueError(f"invalid content for {req.figure_type}: {vr.errors}")
         ctx = RenderContext(palette=palette, font=font, next_shape_id=start_shape_id)
-        result = renderer.render(req.content, req.body_area, ctx)
+        container = req.body_area
+        if _slot_render_enabled() and slots:
+            figure_slot = _pick_figure_slot(slots)
+            if figure_slot is not None:
+                container = _slot_to_box(figure_slot)
+            else:
+                _logger.warning(
+                    "FF_SLOT_RENDER enabled but no figure-kind slot found; "
+                    "falling back to DEFAULT_BODY_AREA",
+                )
+        result = renderer.render(req.content, container, ctx)
         out = _inject_shapes(out, result.shapes_xml)
 
     return out
