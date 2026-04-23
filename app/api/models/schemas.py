@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 LayoutKind = Literal["cover", "toc", "section_divider", "content", "about", "disclaimer"]
 
@@ -94,6 +95,13 @@ class SlideSpec(BaseModel):
         if not s.endswith(("。", "！", "？", ".", "!", "?")):
             raise ValueError("headline_message must end with sentence punctuation (。！？.!?)")
         return s
+
+    @model_validator(mode="after")
+    def _enforce_headline_required(self) -> SlideSpec:
+        # Flag gate: when FF_HEADLINE_REQUIRED=1, headline_message must be present.
+        if os.environ.get("FF_HEADLINE_REQUIRED") == "1" and self.headline_message is None:
+            raise ValueError("headline_message is required when FF_HEADLINE_REQUIRED=1")
+        return self
 
 
 class Blueprint(BaseModel):
