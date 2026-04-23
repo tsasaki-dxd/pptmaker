@@ -86,6 +86,7 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
 
         unpacked = safe_unpack(tpl_local, work / "unpacked")
 
+        skipped: list[int] = []
         for i, slide in enumerate(job.blueprint.get("slides", []), start=1):
             req = RenderRequest(
                 slide_index=i,
@@ -98,8 +99,15 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
             except FileNotFoundError:
                 log.warning("slide %d not found in template, skipping", i)
                 continue
-            new_xml = render_content_slide(original_xml, req, start_shape_id=1000 + 100 * i)
-            unpacked.write_slide(i, new_xml)
+            try:
+                new_xml = render_content_slide(original_xml, req, start_shape_id=1000 + 100 * i)
+                unpacked.write_slide(i, new_xml)
+            except Exception:
+                # Don't kill the entire deck on one malformed slide. Log
+                # and leave the template's original slide in place so the
+                # user still gets something back.
+                log.exception("render failed for slide %d (figure=%s); skipping", i, req.figure_type)
+                skipped.append(i)
 
         out_pptx = work / "output.pptx"
         repack(unpacked, out_pptx)
@@ -130,6 +138,7 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
             "pdf": pdf_key,
             "previews": preview_keys,
             "slide_count": len(job.blueprint.get("slides", [])),
+            "skipped_slides": skipped,
         }
 
 

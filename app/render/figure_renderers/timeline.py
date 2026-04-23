@@ -52,7 +52,16 @@ class TimelineRenderer(FigureRenderer):
             py = bar_y - pill_h // 2 + bar_h // 2
 
             shapes.append(
-                pill_label(sid, f"tl-pill-{i}", px, py, pill_w, pill_h, step["label"], p.purple)
+                pill_label(
+                    sid,
+                    f"tl-pill-{i}",
+                    px,
+                    py,
+                    pill_w,
+                    pill_h,
+                    step.get("label", ""),
+                    p.purple,
+                )
             )
             sid += 1
 

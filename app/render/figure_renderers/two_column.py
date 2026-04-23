@@ -21,8 +21,9 @@ class TwoColumnRenderer(FigureRenderer):
         for side in ("left", "right"):
             if not isinstance(content.get(side), dict):
                 return ValidationResult(False, (f"{side} must be object",))
-            if "title" not in content[side]:
-                return ValidationResult(False, (f"{side}.title missing",))
+        # title/body are treated as soft requirements — render() falls
+        # back to empty strings. One bad slide out of 15 shouldn't kill
+        # the whole deck's render.
         return ValidationResult(True)
 
     def render(
@@ -54,7 +55,7 @@ class TwoColumnRenderer(FigureRenderer):
                     y + 160000,
                     col_w - 360000,
                     420000,
-                    col["title"],
+                    col.get("title", ""),
                     size_pt=13,
                     bold=True,
                     color=p.purple_dk,
