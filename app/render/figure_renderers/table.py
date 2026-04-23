@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -16,6 +16,11 @@ class TableRenderer(FigureRenderer):
         "Rows × columns table with alternating background, header pill, first-column emphasis. "
         "content: {title?: str, headers: [str], rows: [[str]]}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "title": "見出し",
+        "headers": ["列1", "列2"],
+        "rows": [["a", "b"], ["c", "d"]],
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         errors = []

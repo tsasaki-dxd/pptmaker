@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -16,6 +16,11 @@ class StatCalloutRenderer(FigureRenderer):
         "Big number / metric callout. "
         "content: {value: str, label: str, note?: str}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "value": "42%",
+        "label": "成長率",
+        "note": "前年比",
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         for k in ("value", "label"):

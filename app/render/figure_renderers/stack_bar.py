@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import rect_outline, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -21,6 +21,13 @@ class StackBarRenderer(FigureRenderer):
         "Stacked bar chart (<=5 series, <=6 categories). "
         "content: {categories: [str], series: [{name, values: [number]}]}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "categories": ["Q1", "Q2", "Q3"],
+        "series": [
+            {"name": "製品A", "values": [10, 20, 30]},
+            {"name": "製品B", "values": [15, 25, 20]},
+        ],
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         errors: list[str] = []

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import rect_outline, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -16,6 +16,15 @@ class Matrix2x2Renderer(FigureRenderer):
         "2x2 quadrant matrix with x/y axis labels. "
         "content: {axes: {x: {label}, y: {label}}, quadrants: [{title, body?}] x4}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "axes": {"x": {"label": "X軸"}, "y": {"label": "Y軸"}},
+        "quadrants": [
+            {"title": "第1象限", "body": "説明"},
+            {"title": "第2象限", "body": "説明"},
+            {"title": "第3象限", "body": "説明"},
+            {"title": "第4象限", "body": "説明"},
+        ],
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         errors: list[str] = []

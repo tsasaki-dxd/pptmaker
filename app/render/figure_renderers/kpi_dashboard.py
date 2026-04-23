@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import rect_outline, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -21,6 +21,13 @@ class KpiDashboardRenderer(FigureRenderer):
         "KPI dashboard with 3-6 metric cards. "
         "content: {metrics: [{value, label, delta?}]}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "metrics": [
+            {"value": "120", "label": "売上", "delta": "+12%"},
+            {"value": "85%", "label": "満足度", "delta": "+3%"},
+            {"value": "1.2s", "label": "応答", "delta": "-0.1s"},
+        ],
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         metrics = content.get("metrics")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -16,6 +16,13 @@ class PyramidRenderer(FigureRenderer):
         "Stacked pyramid with 3-5 levels (top = narrowest). "
         "content: {levels: [{label, body?}]}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "levels": [
+            {"label": "頂点", "body": "最上位"},
+            {"label": "中位", "body": "中位層"},
+            {"label": "基盤", "body": "土台"},
+        ],
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         levels = content.get("levels")

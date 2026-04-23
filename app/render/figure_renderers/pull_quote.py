@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -24,6 +24,10 @@ class PullQuoteRenderer(FigureRenderer):
         "Pull quote with large text and optional attribution. "
         "content: {quote: str, attribution?: str}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "quote": "印象的な引用文",
+        "attribution": "発言者",
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         quote = content.get("quote")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import _i, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -39,6 +39,13 @@ class ProcessFlowRenderer(FigureRenderer):
         "Horizontal process flow (3-6 steps) with pill + arrow between. "
         "content: {steps: [{label, body?}]}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "steps": [
+            {"label": "計画", "body": "要件整理"},
+            {"label": "実行", "body": "開発"},
+            {"label": "完了", "body": "納品"},
+        ],
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         steps = content.get("steps")

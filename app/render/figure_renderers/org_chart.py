@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import rect_outline, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -30,6 +30,7 @@ class OrgChartRenderer(FigureRenderer):
         "Org chart (max 5 nodes, 3 levels). "
         "content: {nodes: [{id, label, parent?}]}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {}
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         errors: list[str] = []

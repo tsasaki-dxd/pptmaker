@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -20,6 +20,12 @@ class IconListRenderer(FigureRenderer):
         "Vertical icon list (max 6 items). "
         "content: {items: [{icon?, title, body?}]}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "items": [
+            {"icon": "●", "title": "項目1", "body": "説明"},
+            {"icon": "●", "title": "項目2", "body": "説明"},
+        ],
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         items = content.get("items")

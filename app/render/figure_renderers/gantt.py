@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import rect_outline, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -21,6 +21,7 @@ class GanttRenderer(FigureRenderer):
         "content: {tasks: [{label, start_week, end_week, group?}], "
         "milestones?: [{label, week}], total_weeks}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {}
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         errors: list[str] = []

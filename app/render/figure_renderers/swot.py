@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import pill_label, rect_outline, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -25,6 +25,12 @@ class SwotRenderer(FigureRenderer):
         "SWOT 2x2 grid (strengths, weaknesses, opportunities, threats). "
         "content: {strengths|weaknesses|opportunities|threats: {items: [str]}}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "strengths": {"items": ["強み1"]},
+        "weaknesses": {"items": ["弱み1"]},
+        "opportunities": {"items": ["機会1"]},
+        "threats": {"items": ["脅威1"]},
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         errors: list[str] = []

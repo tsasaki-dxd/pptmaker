@@ -52,3 +52,31 @@ def test_output_byte_identical_across_invocations() -> None:
     a = build_blueprint_system_prompt()
     b = build_blueprint_system_prompt()
     assert a.encode("utf-8") == b.encode("utf-8")
+
+
+def test_contains_example_content_for_multiple_types() -> None:
+    prompt = build_blueprint_system_prompt()
+    assert prompt.count("example content:") >= 3
+
+
+def test_table_example_block_has_headers_and_rows() -> None:
+    prompt = build_blueprint_system_prompt()
+    marker = "- `table`:"
+    idx = prompt.find(marker)
+    assert idx != -1
+    next_bullet = prompt.find("\n- `", idx + 1)
+    block = prompt[idx : next_bullet if next_bullet != -1 else len(prompt)]
+    assert "example content:" in block
+    assert '"headers"' in block
+    assert '"rows"' in block
+
+
+def test_gantt_has_description_but_no_example_block() -> None:
+    prompt = build_blueprint_system_prompt()
+    marker = "- `gantt`:"
+    idx = prompt.find(marker)
+    assert idx != -1
+    next_bullet = prompt.find("\n- `", idx + 1)
+    block = prompt[idx : next_bullet if next_bullet != -1 else len(prompt)]
+    assert "Gantt" in block or "gantt" in block
+    assert "example content:" not in block

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -16,6 +16,10 @@ class ComparisonRenderer(FigureRenderer):
         "Side-by-side comparison (before/after, current/ideal). "
         "content: {left: {title, items: [str]}, right: {title, items: [str]}}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "left": {"title": "現状", "items": ["課題1", "課題2"]},
+        "right": {"title": "理想", "items": ["改善1", "改善2"]},
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         for side in ("left", "right"):

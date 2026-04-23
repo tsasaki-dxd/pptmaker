@@ -7,6 +7,7 @@ renderer registry (single source of truth) instead of the hand-maintained
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from pathlib import Path
 
@@ -25,8 +26,18 @@ def _render_enum(caps: list[dict[str, object]]) -> str:
 
 
 def _render_skeletons(caps: list[dict[str, object]]) -> str:
-    lines = [f"- `{c['figure_type']}`: {c['description']}" for c in caps]
-    return "\n".join(lines)
+    blocks: list[str] = []
+    for c in caps:
+        header = f"- `{c['figure_type']}`: {c['description']}"
+        example = c.get("input_schema_example") or {}
+        if isinstance(example, dict) and example:
+            body = json.dumps(example, ensure_ascii=False, indent=2)
+            blocks.append(
+                f"{header}\n  example content:\n  ```json\n{body}\n  ```"
+            )
+        else:
+            blocks.append(header)
+    return "\n".join(blocks)
 
 
 @lru_cache(maxsize=1)

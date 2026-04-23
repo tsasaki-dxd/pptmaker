@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import h_line, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -26,6 +26,13 @@ class CostBreakdownRenderer(FigureRenderer):
         "Cost breakdown with total header and itemized horizontal bars. "
         "content: {total: {label, amount, currency?}, items: [{label, amount}]}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "total": {"label": "合計", "amount": 1000000, "currency": "¥"},
+        "items": [
+            {"label": "項目1", "amount": 600000},
+            {"label": "項目2", "amount": 400000},
+        ],
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         errors: list[str] = []

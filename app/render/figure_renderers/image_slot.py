@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import _i, _xml_escape, rect_outline, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -104,6 +104,12 @@ class ImageSlotRenderer(FigureRenderer):
         "Image slot. content: {asset_id, caption?, alt?, fit?}. "
         "fit ∈ {cover, contain, fill, fit_width} (default cover)."
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "asset_id": "hero-image",
+        "caption": "説明文",
+        "alt": "代替テキスト",
+        "fit": "cover",
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         errors: list[str] = []

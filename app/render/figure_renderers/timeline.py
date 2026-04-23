@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from ..shapes import pill_label, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
@@ -16,6 +16,13 @@ class TimelineRenderer(FigureRenderer):
         "Horizontal timeline bar with labeled steps (3-6 recommended). "
         "content: {steps: [{label, body?}], duration_label?: str}"
     )
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "steps": [
+            {"label": "第1週", "body": "要件定義"},
+            {"label": "第2週", "body": "設計"},
+            {"label": "第3週", "body": "実装"},
+        ],
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         steps = content.get("steps")
