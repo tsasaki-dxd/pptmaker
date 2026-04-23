@@ -133,6 +133,10 @@ export const api = {
     request<{ job_id: string; status: string }>(`/api/projects/${project_id}/render`, { method: 'POST' }),
   preview: (project_id: string, slide_index: number) =>
     request<{ slide_index: number; url: string }>(`/api/projects/${project_id}/preview/${slide_index}`),
+  listPreviews: (project_id: string) =>
+    request<{ slides: { slide_index: number; url: string }[] }>(
+      `/api/projects/${project_id}/previews`,
+    ),
   exportUrl: (project_id: string, format: 'pptx' | 'pdf') =>
     request<{ format: string; url: string }>(`/api/projects/${project_id}/export?format=${format}`),
 };

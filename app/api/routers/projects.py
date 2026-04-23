@@ -463,6 +463,35 @@ def preview(
     return {"slide_index": slide_index, "url": storage.presign_download(key)}
 
 
+@router.get("/{project_id}/previews")
+def list_previews(
+    project_id: str,
+    tenant_id: str = Depends(require_tenant),
+    db: Session = Depends(get_session),
+) -> dict:
+    """All slide preview URLs for the latest blueprint in one call.
+
+    Avoids N round trips from the UI gallery — the preview modal needs
+    every slide's presigned URL at once.
+    """
+    project = _load_project(db, project_id, tenant_id)
+    bp = (
+        db.query(BlueprintRow)
+        .filter(BlueprintRow.project_id == project.id)
+        .order_by(BlueprintRow.version.desc())
+        .first()
+    )
+    if not bp:
+        raise HTTPException(404, "no blueprint")
+    storage = Storage()
+    prefix = storage.output_prefix(tenant_id, project.id, bp.version)
+    slides = []
+    for i in range(1, len(bp.slides) + 1):
+        key = f"{prefix}preview/slide-{i:02d}.jpg"
+        slides.append({"slide_index": i, "url": storage.presign_download(key)})
+    return {"slides": slides}
+
+
 @router.get("/{project_id}/export")
 def export(
     project_id: str,
