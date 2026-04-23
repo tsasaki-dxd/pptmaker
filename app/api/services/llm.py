@@ -102,7 +102,12 @@ class LLMClient:
             model=self.settings.claude_model_blueprint,
             system=system_blocks,
             user=user_prompt,
-            max_tokens=4096,
+            # Japanese blueprints with ~10 slides + figures reliably run
+            # over 4k output tokens and get truncated, which downstream
+            # shows up as "Unterminated string" from json.loads. Claude
+            # Sonnet 4.6 supports up to 64k output; 16k gives plenty of
+            # headroom without paying for the full cap.
+            max_tokens=16384,
             temperature=0.4,
         )
 
@@ -165,8 +170,21 @@ class LLMClient:
             "cache_read_input_tokens": getattr(resp.usage, "cache_read_input_tokens", 0),
             "cache_creation_input_tokens": getattr(resp.usage, "cache_creation_input_tokens", 0),
         }
-        log.info("llm_call model=%s usage=%s", model, usage)
+        stop_reason = getattr(resp, "stop_reason", None)
+        log.info("llm_call model=%s stop_reason=%s usage=%s", model, stop_reason, usage)
+        if stop_reason == "max_tokens":
+            # Surface truncation with a dedicated exception so blueprint_builder
+            # can bail out of its retry loop with a useful message, rather
+            # than letting json.loads spit out "Unterminated string".
+            raise LLMTruncatedError(
+                f"response truncated at max_tokens={max_tokens} "
+                f"(output_tokens={usage['output_tokens']})"
+            )
         return LLMResult(text=text, usage=usage, model=model)
+
+
+class LLMTruncatedError(Exception):
+    """The model hit max_tokens before finishing its output."""
 
 
 def extract_json(text: str) -> Any:
