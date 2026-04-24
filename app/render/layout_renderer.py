@@ -583,6 +583,38 @@ def _replace_first_a_t(block: str, new_text: str) -> str:
 _TITLE_PH_RE = re.compile(
     r'<p:ph\b[^/>]*(?:type="(?:title|ctrTitle)"|idx="0")[^/>]*/?>',
 )
+_BODY_PR_SELFCLOSING_RE = re.compile(r'<a:bodyPr\b([^/>]*)/>')
+_BODY_PR_OPEN_RE = re.compile(r'<a:bodyPr\b([^>]*)>')
+
+
+def _ensure_autofit_on_block(block: str) -> str:
+    """Insert ``<a:normAutofit/>`` inside the shape's <a:bodyPr> so
+    PowerPoint auto-shrinks text that overflows the box.
+
+    Titles in the DXDesignSystem template ship with pt62 hardcoded —
+    fine for the prompt "タイトルを / ここに入れる。" but way too big
+    for a 13-char real title like "DXコンサルティング提案書", which
+    then either wraps past the frame or spills off-slide. normAutofit
+    lets PowerPoint pick a scaled-down font at render time while
+    keeping our replace logic purely textual.
+    """
+    if "normAutofit" in block:
+        return block  # already has it
+
+    def _self_close(m: re.Match) -> str:
+        attrs = m.group(1)
+        return f"<a:bodyPr{attrs}><a:normAutofit/></a:bodyPr>"
+
+    new, n = _BODY_PR_SELFCLOSING_RE.subn(_self_close, block, count=1)
+    if n > 0:
+        return new
+
+    def _open(m: re.Match) -> str:
+        attrs = m.group(1)
+        return f"<a:bodyPr{attrs}><a:normAutofit/>"
+
+    new, n = _BODY_PR_OPEN_RE.subn(_open, block, count=1)
+    return new if n > 0 else block
 
 
 def _replace_title(slide_xml: str, title: str) -> str:
@@ -599,6 +631,10 @@ def _replace_title(slide_xml: str, title: str) -> str:
     embed the prompt as decoration text. Find the first <p:sp> whose
     visible text matches _TITLE_PROMPT_PATTERNS and rewrite it the
     same way.
+
+    Either pass also attaches `<a:normAutofit/>` to the replaced
+    shape's bodyPr so a title longer than the template's hardcoded
+    font size shrinks to fit instead of spilling off the slide.
     """
     replaced = False
 
@@ -609,7 +645,7 @@ def _replace_title(slide_xml: str, title: str) -> str:
             return block
         if _TITLE_PH_RE.search(block):
             replaced = True
-            return _replace_first_a_t(block, title)
+            return _ensure_autofit_on_block(_replace_first_a_t(block, title))
         return block
 
     out = _SP_BLOCK_RE.sub(_pass1, slide_xml)
@@ -624,7 +660,7 @@ def _replace_title(slide_xml: str, title: str) -> str:
         text = _sp_text(block)
         if any(p in text for p in _TITLE_PROMPT_PATTERNS):
             replaced = True
-            return _replace_first_a_t(block, title)
+            return _ensure_autofit_on_block(_replace_first_a_t(block, title))
         return block
 
     return _SP_BLOCK_RE.sub(_pass2, out)
@@ -760,8 +796,49 @@ def _replace_toc_items(slide_xml: str, items: list[str]) -> str:
             used_companion_indices.add(best[0])
         number_companions.append(best)
 
+    # Horizontal rule companions: each TOC entry often has a thin
+    # rect (cx wide, cy 0 with a stroke) sitting just below it as a
+    # separator. Pair each entry with the nearest rule by Y proximity
+    # so cloning extras also clones their rules.
+    rule_companions: list[tuple[int, tuple[int, int, int, int]] | None] = []
+    used_rule_indices: set[int] = set()
+    for _a_idx, a_rect in zip(anchor_indices, anchor_rects, strict=True):
+        if a_rect is None:
+            rule_companions.append(None)
+            continue
+        a_bottom = a_rect[1] + a_rect[3]
+        best: tuple[int, tuple[int, int, int, int]] | None = None
+        best_dist = half_window
+        for j, m in enumerate(matches):
+            if (
+                j in anchor_indices
+                or j in used_companion_indices
+                or j in used_rule_indices
+            ):
+                continue
+            block = m.group(0)
+            text = _sp_text(block).strip()
+            if text:
+                continue  # rules carry no text
+            r = _read_xfrm(block)
+            if r is None:
+                continue
+            if r[3] > 20000:  # cy: rules are thin (often 0)
+                continue
+            if r[2] < 1_000_000:  # cx: rules span the TOC items column
+                continue
+            rule_top = r[1]
+            dist = abs(rule_top - a_bottom)
+            if dist < best_dist:
+                best = (j, r)
+                best_dist = dist
+        if best is not None:
+            used_rule_indices.add(best[0])
+        rule_companions.append(best)
+
     # Reference offsets for cloning the extras: take the first anchor
-    # whose companion we found; clone its number's relative dx/dy/w/h.
+    # whose companion we found; clone its number's and rule's
+    # relative dx/dy/w/h.
     template_anchor_block = matches[first_anchor_idx].group(0)
     template_number_block: str | None = None
     template_number_offset: tuple[int, int, int, int] | None = None  # dx, dy, w, h
@@ -775,6 +852,21 @@ def _replace_toc_items(slide_xml: str, items: list[str]) -> str:
             n_rect[1] - a_rect[1],
             n_rect[2],
             n_rect[3],
+        )
+        break
+
+    template_rule_block: str | None = None
+    template_rule_offset: tuple[int, int, int, int] | None = None
+    for a_rect, comp in zip(anchor_rects, rule_companions, strict=True):
+        if a_rect is None or comp is None:
+            continue
+        r_idx, r_rect = comp
+        template_rule_block = matches[r_idx].group(0)
+        template_rule_offset = (
+            r_rect[0] - a_rect[0],
+            r_rect[1] - a_rect[1],
+            r_rect[2],
+            r_rect[3],
         )
         break
 
@@ -810,6 +902,22 @@ def _replace_toc_items(slide_xml: str, items: list[str]) -> str:
                 new_n = _replace_first_a_t(matches[n_idx].group(0), f"{i + 1:02d}")
                 new_n = _write_xfrm(new_n, new_n_x, new_n_y, n_rect[2], n_rect[3])
                 new_blocks[n_idx] = new_n
+
+            rule_comp = rule_companions[i]
+            if rule_comp is not None:
+                r_idx, r_rect = rule_comp
+                anchor_rect = anchor_rects[i]
+                if anchor_rect is not None:
+                    rdy = r_rect[1] - anchor_rect[1]
+                    rdx = r_rect[0] - anchor_rect[0]
+                else:
+                    rdy = template_rule_offset[1] if template_rule_offset else 0
+                    rdx = template_rule_offset[0] if template_rule_offset else 0
+                new_r_y = new_anchor_y + rdy
+                new_r_x = first_x + rdx
+                new_blocks[r_idx] = _write_xfrm(
+                    matches[r_idx].group(0), new_r_x, new_r_y, r_rect[2], r_rect[3]
+                )
         else:
             anchor_clone = _replace_first_a_t(template_anchor_block, text)
             anchor_clone = _write_xfrm(
@@ -823,12 +931,25 @@ def _replace_toc_items(slide_xml: str, items: list[str]) -> str:
                     num_clone, first_x + dx, new_anchor_y + dy, nw, nh
                 )
                 appended_clones.append(num_clone)
+            if template_rule_block is not None and template_rule_offset is not None:
+                rdx, rdy, rw, rh = template_rule_offset
+                rule_clone = _write_xfrm(
+                    template_rule_block,
+                    first_x + rdx,
+                    new_anchor_y + rdy,
+                    rw,
+                    rh,
+                )
+                appended_clones.append(rule_clone)
 
     for k in range(len(items), len(anchor_indices)):
         drop_indices.add(anchor_indices[k])
         comp = number_companions[k]
         if comp is not None:
             drop_indices.add(comp[0])
+        rule_comp = rule_companions[k]
+        if rule_comp is not None:
+            drop_indices.add(rule_comp[0])
 
     # Step 5: stitch the slide XML back together.
     last_used_idx = (

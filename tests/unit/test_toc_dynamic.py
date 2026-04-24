@@ -6,7 +6,12 @@ from __future__ import annotations
 
 import re
 
-from render.layout_renderer import _replace_toc_items
+from render.layout_renderer import (
+    _SP_BLOCK_RE,
+    _read_xfrm,
+    _replace_toc_items,
+    _sp_text,
+)
 
 
 def _slot(idx: int, y: int, *, label: str = "項目タイトル", cy: int = 300_000) -> str:
@@ -144,3 +149,58 @@ def test_fewer_items_drop_companion_numbers_too() -> None:
     assert "<a:t>03</a:t>" in out
     assert "<a:t>04</a:t>" not in out
     assert "<a:t>05</a:t>" not in out
+
+
+def _rule(idx: int, y: int, *, w: int = 5_000_000) -> str:
+    """A thin horizontal-rule companion shape: empty text, cy=0, wide cx."""
+    return (
+        f'<p:sp><p:nvSpPr><p:cNvPr id="{idx}" name="rule{idx}"/>'
+        f'<p:cNvSpPr/><p:nvPr/></p:nvSpPr>'
+        f'<p:spPr><a:xfrm><a:off x="2000000" y="{y}"/>'
+        f'<a:ext cx="{w}" cy="0"/></a:xfrm></p:spPr>'
+        f'<p:txBody><a:p/></p:txBody></p:sp>'
+    )
+
+
+def test_rule_companions_cloned_for_extra_entries() -> None:
+    # Template: 4 entries, each with a rule below (no rule after entry 4).
+    parts = ["<p:sld><p:cSld><p:spTree>"]
+    for i in range(4):
+        parts.append(_entry_with_number(i + 1, 1_000_000 + 500_000 * i, f"{i + 1:02d}"))
+        parts.append(_rule(i + 100, 1_300_000 + 500_000 * i))
+    parts.append("</p:spTree></p:cSld></p:sld>")
+    src = "".join(parts)
+
+    out = _replace_toc_items(src, ["A", "B", "C", "D", "E", "F"])
+    # Count rule shapes (cy=0, no text)
+    rule_count = 0
+    for m in _SP_BLOCK_RE.finditer(out):
+        b = m.group(0)
+        if _sp_text(b).strip():
+            continue
+        r = _read_xfrm(b)
+        if r and r[3] == 0 and r[2] > 1_000_000:
+            rule_count += 1
+    # Expanded 4 → 6 entries, so rules should grow to 6 (one per entry).
+    assert rule_count == 6
+
+
+def test_rule_companions_dropped_with_trailing_entries() -> None:
+    parts = ["<p:sld><p:cSld><p:spTree>"]
+    for i in range(5):
+        parts.append(_entry_with_number(i + 1, 1_000_000 + 500_000 * i, f"{i + 1:02d}"))
+        parts.append(_rule(i + 100, 1_300_000 + 500_000 * i))
+    parts.append("</p:spTree></p:cSld></p:sld>")
+    src = "".join(parts)
+
+    out = _replace_toc_items(src, ["A", "B"])
+    rule_count = 0
+    for m in _SP_BLOCK_RE.finditer(out):
+        b = m.group(0)
+        if _sp_text(b).strip():
+            continue
+        r = _read_xfrm(b)
+        if r and r[3] == 0 and r[2] > 1_000_000:
+            rule_count += 1
+    # Dropped from 5 to 2 entries → rules drop with them.
+    assert rule_count == 2
