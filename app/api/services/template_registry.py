@@ -68,8 +68,25 @@ def _classify_slide(index: int, xml: str, total: int) -> tuple[str, float, str]:
         return ("disclaimer", 0.85, "disclaimer keyword found")
     if any("会社概要" in t or "About" in t for t in text_runs):
         return ("about", 0.8, "about keyword found")
-    if re.search(r"^\s*0?\d\s*$", joined) or any(re.match(r"\d{1,2}\.", t.strip()) for t in text_runs):
-        return ("section_divider", 0.7, "section number marker")
+    # Section divider cues: numeric markers ("1.", "01"), or explicit
+    # labels the template designer uses for chapter/section pages.
+    # Corporate decks commonly brand these as "SECTION 01" / "セクション"
+    # / "第N章" rather than plain "1." — the old heuristic missed all
+    # of those and misclassified them as content, so section dividers
+    # ended up being rendered onto content template pages.
+    section_cue = any(
+        re.search(r"\b[Ss][Ee][Cc][Tt][Ii][Oo][Nn]\b", t)
+        or "セクション" in t
+        or re.search(r"第\s*\d+\s*章", t)
+        or re.search(r"\bChapter\b", t)
+        for t in text_runs
+    )
+    if (
+        re.search(r"^\s*0?\d\s*$", joined)
+        or any(re.match(r"\d{1,2}\.", t.strip()) for t in text_runs)
+        or section_cue
+    ):
+        return ("section_divider", 0.7, "section marker")
     return ("content", 0.6, "default content")
 
 
@@ -88,24 +105,48 @@ def _rect_to_dict(rect: EMURect | None) -> dict[str, int] | None:
 
 
 def _slot_to_dict(slot: Slot) -> dict[str, Any]:
-    return {
+    out: dict[str, Any] = {
         "id": slot.id,
         "kind": slot.kind,
-        "rect": _rect_to_dict(slot.rect),
         "role": slot.role,
         "idx": slot.idx,
     }
+    # Flatten rect into x/y/w/h at the top level so layout_renderer's
+    # _slot_to_box / _render_text_slot / _pick_figure_slot can read
+    # them directly. A previous version nested the rect under "rect"
+    # with cx/cy keys, which didn't match what the render side reads,
+    # so FF_SLOT_RENDER paths crashed with KeyError on every slide and
+    # the handler silently fell back to the unmodified template —
+    # leaving placeholder text bleeding through.
+    if slot.rect is not None:
+        out["x"] = slot.rect.x
+        out["y"] = slot.rect.y
+        out["w"] = slot.rect.cx
+        out["h"] = slot.rect.cy
+    return out
 
 
 def _fixed_to_dict(fixed: FixedElement) -> dict[str, Any]:
-    return {
-        "rect": _rect_to_dict(fixed.rect),
-        "element_type": fixed.element_type,
-    }
+    out: dict[str, Any] = {"element_type": fixed.element_type}
+    if fixed.rect is not None:
+        out["x"] = fixed.rect.x
+        out["y"] = fixed.rect.y
+        out["w"] = fixed.rect.cx
+        out["h"] = fixed.rect.cy
+    return out
 
 
 def _layout_has_slots(layout: dict[str, Any]) -> bool:
-    return "slots" in layout and "fixed_elements" in layout
+    if "slots" not in layout or "fixed_elements" not in layout:
+        return False
+    # Detect the legacy nested-rect format and force re-extraction so
+    # existing templates get rewritten into the flat format above.
+    slots = layout["slots"]
+    if slots:
+        first = slots[0]
+        if not isinstance(first, dict) or ("w" not in first and first.get("rect") is not None):
+            return False
+    return True
 
 
 def _read_slide_xml(zf: zipfile.ZipFile, slide_index: int) -> bytes | None:
