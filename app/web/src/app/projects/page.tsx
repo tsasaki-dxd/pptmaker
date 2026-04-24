@@ -36,6 +36,12 @@ export default function ProjectsPage() {
     projectName: string;
     slides: { slide_index: number; url: string }[];
   } | null>(null);
+  // Post-render preview (Step 3 / done state). Loaded after render
+  // completes so the user can eyeball every slide and fire per-slide
+  // revisions from the same screen without hopping to the list modal.
+  const [stepPreviews, setStepPreviews] = useState<
+    { slide_index: number; url: string }[]
+  >([]);
 
   const push = (msg: string) => setLog((prev) => [...prev, msg]);
 
@@ -188,10 +194,59 @@ export default function ProjectsPage() {
       }
       setStep('done');
       await refresh();
+      await loadStepPreviews();
     } catch (e) {
       push(`失敗: ${String(e)}`);
       setStep('reviewing'); // back to review so user can retry
       await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadStepPreviews() {
+    if (!project) return;
+    try {
+      const res = await api.listPreviews(project.id);
+      setStepPreviews(res.slides);
+    } catch (e) {
+      push(`プレビュー取得失敗: ${String(e)}`);
+      setStepPreviews([]);
+    }
+  }
+
+  // Per-slide revision fired from the Step 3 side panel. Reuses the
+  // same slide_index-scoped LLM path as Step 2, then triggers a full
+  // render (deterministic for unchanged slides since the render
+  // pipeline has no LLM in it). While it runs we flip the step back
+  // to "rendering" so the user sees progress.
+  async function handleStep3ReviseAndRender(
+    slideIndex: number | null,
+    instruction: string,
+  ) {
+    if (!project || !instruction.trim()) return;
+    setBusy(true);
+    try {
+      const scope = slideIndex ? `スライド#${slideIndex}` : '全体';
+      push(`(step3) 修正指示送信 (${scope}): "${instruction}"`);
+      await api.revise(project.id, instruction, slideIndex ?? undefined);
+      const bp = await api.getBlueprint(project.id);
+      setBlueprint(bp);
+      push(`修正完了: v${bp.version}`);
+
+      setStep('rendering');
+      push('再レンダリング投入...');
+      const r = await api.render(project.id);
+      push(`job_id = ${r.job_id} status=${r.status}`);
+      const status = await pollRenderComplete(project.id);
+      if (status === 'failed') throw new Error('再レンダリング失敗');
+      push(status === 'partial' ? '部分完了' : '完了!');
+      setStep('done');
+      await refresh();
+      await loadStepPreviews();
+    } catch (e) {
+      push(`失敗: ${String(e)}`);
+      setStep('done');
     } finally {
       setBusy(false);
     }
@@ -228,6 +283,7 @@ export default function ProjectsPage() {
     setLog([]);
     setName('');
     setIntent('');
+    setStepPreviews([]);
   }
 
   async function handleOpenPreviewGallery(p: Project) {
@@ -327,7 +383,15 @@ export default function ProjectsPage() {
       )}
 
       {(step === 'rendering' || step === 'done') && (
-        <Step3Result step={step} project={project} onStartOver={handleStartOver} />
+        <Step3Result
+          step={step}
+          project={project}
+          previews={stepPreviews}
+          onStartOver={handleStartOver}
+          onExport={handleExport}
+          onReviseAndRender={handleStep3ReviseAndRender}
+          busy={busy}
+        />
       )}
 
       {log.length > 0 && (
@@ -764,24 +828,161 @@ function FieldView({ name, value }: { name: string; value: unknown }) {
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// Step 3: render result
+// Step 3: render result — preview grid (left) + revise side panel (right)
 // ──────────────────────────────────────────────────────────────────────
-function Step3Result(props: { step: Step; project: Project | null; onStartOver: () => void }) {
-  const { step, project, onStartOver } = props;
+function Step3Result(props: {
+  step: Step;
+  project: Project | null;
+  previews: { slide_index: number; url: string }[];
+  onStartOver: () => void;
+  onExport: (projectId: string, format: 'pptx' | 'pdf') => void;
+  onReviseAndRender: (slideIndex: number | null, instruction: string) => void;
+  busy: boolean;
+}) {
+  const { step, project, previews, onStartOver, onExport, onReviseAndRender, busy } = props;
+  const [selected, setSelected] = useState<number | null>(null);
+  const [revision, setRevision] = useState('');
+  const [lightbox, setLightbox] = useState<{ url: string; index: number } | null>(null);
+
+  const scopeLabel = selected !== null ? `スライド#${selected}` : '全体';
+
+  function submit() {
+    if (!revision.trim()) return;
+    onReviseAndRender(selected, revision);
+    setRevision('');
+  }
+
   return (
-    <div className="space-y-3 rounded border border-purple-lt/60 bg-white p-4">
-      <h3 className="text-sm font-bold text-muted">Step 3: レンダリング</h3>
-      {step === 'rendering' && <p className="text-sm">レンダリング中...</p>}
-      {step === 'done' && project && (
-        <>
-          <p className="text-sm">完了しました。下のプロジェクト一覧から preview / export してください。</p>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 rounded border border-purple-lt/60 bg-white p-4">
+        <h3 className="text-sm font-bold text-muted">Step 3: レンダリング結果</h3>
+        <div className="flex gap-2">
+          {project && step === 'done' && (
+            <>
+              <button
+                onClick={() => onExport(project.id, 'pptx')}
+                disabled={busy}
+                className="rounded border border-purple-lt px-3 py-1 text-xs hover:bg-purple-lt/20 disabled:opacity-50"
+                type="button"
+              >
+                .pptx
+              </button>
+              <button
+                onClick={() => onExport(project.id, 'pdf')}
+                disabled={busy}
+                className="rounded border border-purple-lt px-3 py-1 text-xs hover:bg-purple-lt/20 disabled:opacity-50"
+                type="button"
+              >
+                .pdf
+              </button>
+            </>
+          )}
           <button
             onClick={onStartOver}
-            className="rounded bg-purple px-4 py-2 text-white"
+            disabled={busy}
+            className="rounded bg-purple px-3 py-1 text-xs text-white disabled:bg-muted"
+            type="button"
           >
             新規プロジェクト
           </button>
-        </>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="rounded border border-purple-lt/60 bg-white p-4 lg:col-span-2">
+          {step === 'rendering' ? (
+            <p className="text-sm">レンダリング中...</p>
+          ) : previews.length === 0 ? (
+            <p className="text-sm text-muted">プレビュー画像がありません。</p>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {previews.map((s) => {
+                const isSelected = selected === s.slide_index;
+                return (
+                  <button
+                    key={s.slide_index}
+                    onClick={() => setSelected(isSelected ? null : s.slide_index)}
+                    onDoubleClick={() => setLightbox({ url: s.url, index: s.slide_index })}
+                    className={`overflow-hidden rounded border text-left transition ${
+                      isSelected
+                        ? 'border-purple shadow-md ring-2 ring-purple/40'
+                        : 'border-purple-lt/60 hover:border-purple'
+                    }`}
+                    type="button"
+                  >
+                    <img src={s.url} alt={`slide ${s.slide_index}`} className="w-full" loading="lazy" />
+                    <div className="flex items-center justify-between px-2 py-1 text-xs">
+                      <span className="text-muted">#{s.slide_index}</span>
+                      {isSelected && <span className="font-bold text-purple">選択中</span>}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {previews.length > 0 && (
+            <p className="mt-2 text-xs text-muted">
+              クリック=修正対象に選択 / ダブルクリック=拡大
+            </p>
+          )}
+        </div>
+
+        <div className="rounded border border-purple-lt/60 bg-white p-4">
+          <div className="mb-2 flex items-baseline justify-between">
+            <h4 className="text-sm font-bold">修正指示</h4>
+            <span className="text-xs text-muted">{scopeLabel}</span>
+          </div>
+          <div className="mb-2 flex gap-2 text-xs">
+            <button
+              onClick={() => setSelected(null)}
+              disabled={busy}
+              className={`rounded border px-2 py-1 ${
+                selected === null
+                  ? 'border-purple bg-purple-lt/30 text-purple'
+                  : 'border-purple-lt text-muted hover:bg-purple-lt/20'
+              } disabled:opacity-50`}
+              type="button"
+            >
+              全体を修正
+            </button>
+            {selected !== null && (
+              <span className="self-center text-muted">スライド#{selected} のみ修正</span>
+            )}
+          </div>
+          <textarea
+            value={revision}
+            onChange={(e) => setRevision(e.target.value)}
+            placeholder={
+              selected !== null
+                ? '例: このスライドの箇条書きを3項目に絞って、表にして'
+                : '例: 全体的にカジュアルな言い回しに書き換えて'
+            }
+            disabled={busy || step !== 'done'}
+            className="min-h-[100px] w-full rounded border border-purple-lt px-3 py-2 text-sm"
+          />
+          <button
+            onClick={submit}
+            disabled={!revision.trim() || busy || step !== 'done'}
+            className="mt-2 w-full rounded bg-purple px-3 py-2 text-sm text-white disabled:bg-muted"
+            type="button"
+          >
+            {busy ? '処理中...' : '修正 → 再レンダリング'}
+          </button>
+        </div>
+      </div>
+
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => setLightbox(null)}
+        >
+          <img
+            src={lightbox.url}
+            alt={`slide ${lightbox.index}`}
+            className="max-h-full max-w-full"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
       )}
     </div>
   );
