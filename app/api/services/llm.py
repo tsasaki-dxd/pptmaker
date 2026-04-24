@@ -131,7 +131,12 @@ class LLMClient:
             temperature=0.4,
         )
 
-    def revision_patch(self, current_blueprint: dict[str, Any], instruction: str) -> LLMResult:
+    def revision_patch(
+        self,
+        current_blueprint: dict[str, Any],
+        instruction: str,
+        slide_index: int | None = None,
+    ) -> LLMResult:
         system = [
             {
                 "type": "text",
@@ -139,8 +144,18 @@ class LLMClient:
                 "cache_control": {"type": "ephemeral"},
             }
         ]
+        if slide_index is not None:
+            # Array index is 0-based, slide numbering is 1-based.
+            scope_line = (
+                f"【修正範囲】スライド {slide_index} のみ。"
+                f"patch の path は /slides/{slide_index - 1} 配下に限る。"
+                "他スライドや /title / /design_tokens を含む op は禁止。\n"
+            )
+        else:
+            scope_line = ""
         user_prompt = (
             f"【現 Blueprint】\n```json\n{json.dumps(current_blueprint, ensure_ascii=False)}\n```\n"
+            f"{scope_line}"
             f"【修正指示】\n{instruction}\n"
             "RFC 6902 JSON Patch 配列のみを返してください。"
         )

@@ -124,10 +124,18 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ mappings }),
     }),
-  revise: (project_id: string, instruction: string) =>
+  revise: (
+    project_id: string,
+    instruction: string,
+    slide_index?: number,
+  ) =>
     request<{ id: string; patch: unknown[] }>(`/api/projects/${project_id}/revise`, {
       method: 'POST',
-      body: JSON.stringify({ instruction }),
+      body: JSON.stringify(
+        slide_index === undefined
+          ? { instruction }
+          : { instruction, slide_index },
+      ),
     }),
   render: (project_id: string) =>
     request<{ job_id: string; status: string }>(`/api/projects/${project_id}/render`, { method: 'POST' }),

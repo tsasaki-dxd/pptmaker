@@ -357,12 +357,22 @@ def revise(
     if not current:
         raise HTTPException(400, "no existing blueprint")
 
+    # Validate slide_index against the current blueprint before spending
+    # an LLM call; caller passed an out-of-range index, fail fast.
+    if body.slide_index is not None:
+        if body.slide_index < 1 or body.slide_index > len(current.slides):
+            raise HTTPException(
+                400,
+                f"slide_index {body.slide_index} out of range (1..{len(current.slides)})",
+            )
+
     llm = LLMClient()
     try:
         patch, new_slides_obj = apply_instruction(
             llm,
             {"title": current.title, "slides": current.slides},
             body.instruction,
+            slide_index=body.slide_index,
         )
     except RevisionError as e:
         raise HTTPException(400, str(e)) from e
