@@ -130,15 +130,32 @@ export default function ProjectsPage() {
     }
   }
 
-  async function handleRevise() {
+  async function handleRevise(slideIndex?: number) {
     if (!project || !revisionText.trim()) return;
     setBusy(true);
     try {
-      push(`修正指示送信: "${revisionText}"`);
-      await api.revise(project.id, revisionText);
+      const scope = slideIndex ? `スライド#${slideIndex}` : '全体';
+      push(`修正指示送信 (${scope}): "${revisionText}"`);
+      await api.revise(project.id, revisionText, slideIndex);
       const bp = await api.getBlueprint(project.id);
       setBlueprint(bp);
       setRevisionText('');
+      push(`修正完了: v${bp.version}`);
+    } catch (e) {
+      push(`修正失敗: ${String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleReviseSlide(slideIndex: number, instruction: string) {
+    if (!project || !instruction.trim()) return;
+    setBusy(true);
+    try {
+      push(`スライド#${slideIndex} 修正指示: "${instruction}"`);
+      await api.revise(project.id, instruction, slideIndex);
+      const bp = await api.getBlueprint(project.id);
+      setBlueprint(bp);
       push(`修正完了: v${bp.version}`);
     } catch (e) {
       push(`修正失敗: ${String(e)}`);
@@ -301,7 +318,8 @@ export default function ProjectsPage() {
           onMappingChange={handleSlideMappingChange}
           revisionText={revisionText}
           setRevisionText={setRevisionText}
-          onRevise={handleRevise}
+          onRevise={() => handleRevise()}
+          onReviseSlide={handleReviseSlide}
           onRender={handleRender}
           onCancel={handleStartOver}
           busy={busy}
@@ -479,12 +497,26 @@ function Step2Review(props: {
   revisionText: string;
   setRevisionText: (s: string) => void;
   onRevise: () => void;
+  onReviseSlide: (slideIndex: number, instruction: string) => void;
   onRender: () => void;
   onCancel: () => void;
   busy: boolean;
 }) {
-  const { blueprint, template, onMappingChange, revisionText, setRevisionText, onRevise, onRender, onCancel, busy } = props;
+  const {
+    blueprint,
+    template,
+    onMappingChange,
+    revisionText,
+    setRevisionText,
+    onRevise,
+    onReviseSlide,
+    onRender,
+    onCancel,
+    busy,
+  } = props;
   const templatePages = template?.template_slide_count ?? 0;
+  const layoutByIndex = new Map<number, string>();
+  for (const l of template?.layouts ?? []) layoutByIndex.set(l.index, l.layout);
 
   return (
     <div className="space-y-4 rounded border border-purple-lt/60 bg-white p-4">
@@ -496,35 +528,23 @@ function Step2Review(props: {
       </div>
       <h4 className="text-base font-bold">{blueprint.title}</h4>
 
-      <div className="overflow-x-auto">
-        <table className="min-w-full text-xs">
-          <thead className="text-left text-muted">
-            <tr>
-              <th className="px-2 py-1">#</th>
-              <th className="px-2 py-1">layout</th>
-              <th className="px-2 py-1">figure</th>
-              <th className="px-2 py-1">主要内容</th>
-              <th className="px-2 py-1">テンプレページ</th>
-            </tr>
-          </thead>
-          <tbody>
-            {blueprint.slides.map((s) => (
-              <SlideRow
-                key={s.index}
-                slide={s}
-                templatePages={templatePages}
-                templateLayouts={template?.layouts ?? []}
-                onMappingChange={onMappingChange}
-                disabled={busy}
-              />
-            ))}
-          </tbody>
-        </table>
+      <div className="space-y-3">
+        {blueprint.slides.map((s) => (
+          <SlideCard
+            key={s.index}
+            slide={s}
+            templatePages={templatePages}
+            layoutByIndex={layoutByIndex}
+            onMappingChange={onMappingChange}
+            onReviseSlide={onReviseSlide}
+            disabled={busy}
+          />
+        ))}
       </div>
 
       <div className="space-y-2 rounded border border-purple-lt/60 p-3">
         <label className="flex flex-col gap-1 text-sm">
-          <span>修正指示（LLMで全体を書き換え）</span>
+          <span>修正指示（全体を書き換え）</span>
           <textarea
             value={revisionText}
             onChange={(e) => setRevisionText(e.target.value)}
@@ -538,7 +558,7 @@ function Step2Review(props: {
           disabled={!revisionText.trim() || busy}
           className="rounded border border-purple px-3 py-1 text-sm text-purple disabled:opacity-50"
         >
-          {busy ? '実行中...' : '修正'}
+          {busy ? '実行中...' : '全体を修正'}
         </button>
       </div>
 
@@ -562,66 +582,185 @@ function Step2Review(props: {
   );
 }
 
-function SlideRow(props: {
+function SlideCard(props: {
   slide: SlideSpec;
   templatePages: number;
-  templateLayouts: TemplateLayoutEntry[];
+  layoutByIndex: Map<number, string>;
   onMappingChange: (slideIndex: number, value: number) => void;
+  onReviseSlide: (slideIndex: number, instruction: string) => void;
   disabled: boolean;
 }) {
-  const { slide, templatePages, templateLayouts, onMappingChange, disabled } = props;
-  const summary = summarizeContent(slide);
+  const { slide, templatePages, layoutByIndex, onMappingChange, onReviseSlide, disabled } = props;
+  const [localRevision, setLocalRevision] = useState('');
+  const [expanded, setExpanded] = useState(false);
   const current =
     slide.template_slide_index ??
     (templatePages > 0 ? ((slide.index - 1) % templatePages) + 1 : 1);
-  // Build a lookup so dropdown options show the layout classification
-  // next to the page number (e.g. "#3 (section_divider)"). Unclassified
-  // templates fall back to just "#N".
-  const layoutByIndex = new Map<number, string>();
-  for (const l of templateLayouts) layoutByIndex.set(l.index, l.layout);
+
   return (
-    <tr className="border-t border-purple-lt/40">
-      <td className="px-2 py-1 align-top font-mono">{slide.index}</td>
-      <td className="px-2 py-1 align-top">{slide.layout}</td>
-      <td className="px-2 py-1 align-top">{slide.figure_type ?? '-'}</td>
-      <td className="px-2 py-1 align-top">{summary}</td>
-      <td className="px-2 py-1 align-top">
-        {templatePages > 0 ? (
-          <select
-            value={current}
-            onChange={(e) => onMappingChange(slide.index, Number(e.target.value))}
-            disabled={disabled}
-            className="rounded border border-purple-lt px-1 py-0.5 text-xs"
-          >
-            {Array.from({ length: templatePages }, (_, i) => i + 1).map((n) => {
-              const lt = layoutByIndex.get(n);
-              return (
-                <option key={n} value={n}>
-                  {lt ? `#${n} (${lt})` : `#${n}`}
-                </option>
-              );
-            })}
-          </select>
-        ) : (
-          <span className="text-muted">N/A</span>
+    <div className="rounded border border-purple-lt/60 p-3 text-xs">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <span className="font-mono text-sm font-bold">#{slide.index}</span>
+        <span className="rounded bg-purple-lt/40 px-2 py-0.5 text-xs">{slide.layout}</span>
+        {slide.figure_type && (
+          <span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-800">
+            {slide.figure_type}
+          </span>
         )}
-      </td>
-    </tr>
+        <span className="ml-auto flex items-center gap-1">
+          <span className="text-muted">テンプレ</span>
+          {templatePages > 0 ? (
+            <select
+              value={current}
+              onChange={(e) => onMappingChange(slide.index, Number(e.target.value))}
+              disabled={disabled}
+              className="rounded border border-purple-lt px-1 py-0.5 text-xs"
+            >
+              {Array.from({ length: templatePages }, (_, i) => i + 1).map((n) => {
+                const lt = layoutByIndex.get(n);
+                return (
+                  <option key={n} value={n}>
+                    {lt ? `#${n} (${lt})` : `#${n}`}
+                  </option>
+                );
+              })}
+            </select>
+          ) : (
+            <span className="text-muted">N/A</span>
+          )}
+        </span>
+      </div>
+
+      <div className="mt-2 space-y-1">
+        <ContentTree content={slide.content} />
+      </div>
+
+      <div className="mt-2">
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          className="text-xs text-purple underline"
+          type="button"
+        >
+          {expanded ? 'このスライド修正欄を閉じる' : 'このスライドを修正…'}
+        </button>
+        {expanded && (
+          <div className="mt-2 flex flex-col gap-2">
+            <textarea
+              value={localRevision}
+              onChange={(e) => setLocalRevision(e.target.value)}
+              placeholder="例: 箇条書きを3項目に絞って、最後の1項目を表に変えて"
+              disabled={disabled}
+              className="min-h-[60px] rounded border border-purple-lt px-3 py-2"
+            />
+            <div className="flex gap-2">
+              <button
+                onClick={() => {
+                  onReviseSlide(slide.index, localRevision);
+                  setLocalRevision('');
+                }}
+                disabled={!localRevision.trim() || disabled}
+                className="rounded border border-purple px-3 py-1 text-sm text-purple disabled:opacity-50"
+                type="button"
+              >
+                このスライドを修正
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
-function summarizeContent(slide: SlideSpec): string {
-  const c = slide.content as Record<string, unknown>;
-  const title = c.title as string | undefined;
-  if (title) return title;
-  const items = c.items as unknown[] | undefined;
-  if (Array.isArray(items) && items.length > 0) {
-    const first = typeof items[0] === 'string' ? items[0] : JSON.stringify(items[0]);
-    return `${first}${items.length > 1 ? ` (+${items.length - 1})` : ''}`;
+// Render the blueprint slide's `content` dict in a readable form —
+// the user wanted to see exactly what's going to land on the slide
+// before rendering. Handles the shapes we see in practice; anything
+// else falls through to a JSON dump so nothing is silently hidden.
+function ContentTree({ content }: { content: Record<string, unknown> }) {
+  const title = content.title as string | undefined;
+  const body = content.body as string | undefined;
+  const subtitle = content.subtitle as string | undefined;
+
+  return (
+    <div className="space-y-1">
+      {title && <div className="font-bold text-sm text-dark">{title}</div>}
+      {subtitle && <div className="text-muted">{subtitle}</div>}
+      {body && <div className="whitespace-pre-wrap text-dark">{body}</div>}
+      <StructuredContent content={content} />
+    </div>
+  );
+}
+
+function StructuredContent({ content }: { content: Record<string, unknown> }) {
+  // title/subtitle/body/slots are already rendered above / internal.
+  const RESERVED = new Set(['title', 'subtitle', 'body', 'body_main', 'slots', 'note', 'footer']);
+  const extras = Object.entries(content).filter(([k]) => !RESERVED.has(k));
+  if (extras.length === 0) return null;
+  return (
+    <div className="space-y-1">
+      {extras.map(([key, value]) => (
+        <FieldView key={key} name={key} value={value} />
+      ))}
+    </div>
+  );
+}
+
+function FieldView({ name, value }: { name: string; value: unknown }) {
+  if (Array.isArray(value)) {
+    const allStrings = value.every((v) => typeof v === 'string');
+    if (allStrings) {
+      return (
+        <div>
+          <span className="text-muted">{name}:</span>
+          <ul className="ml-4 list-disc text-dark">
+            {(value as string[]).map((v, i) => (
+              <li key={i}>{v}</li>
+            ))}
+          </ul>
+        </div>
+      );
+    }
+    return (
+      <div>
+        <span className="text-muted">{name}:</span>
+        <ul className="ml-4 list-disc text-dark">
+          {value.map((v, i) => (
+            <li key={i}>
+              {typeof v === 'object' && v !== null ? (
+                <div className="ml-0">
+                  {Object.entries(v as Record<string, unknown>).map(([k, val]) => (
+                    <FieldView key={k} name={k} value={val} />
+                  ))}
+                </div>
+              ) : (
+                String(v)
+              )}
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
   }
-  const value = c.value as string | undefined;
-  if (value) return `${value} ${(c.label as string) ?? ''}`.trim();
-  return '(no preview)';
+  if (typeof value === 'object' && value !== null) {
+    return (
+      <div>
+        <span className="text-muted">{name}:</span>
+        <div className="ml-4">
+          {Object.entries(value as Record<string, unknown>).map(([k, v]) => (
+            <FieldView key={k} name={k} value={v} />
+          ))}
+        </div>
+      </div>
+    );
+  }
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return (
+      <div>
+        <span className="text-muted">{name}:</span> <span className="text-dark">{String(value)}</span>
+      </div>
+    );
+  }
+  return null;
 }
 
 // ──────────────────────────────────────────────────────────────────────
