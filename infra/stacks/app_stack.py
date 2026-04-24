@@ -303,7 +303,12 @@ class AppStack(cdk.Stack):
                 directory=str(REPO_ROOT / "app" / "render"),
             ),
             memory_size=3008,
-            timeout=cdk.Duration.minutes(5),
+            # Bumped from 5 → 10 min to accommodate the layout-designer
+            # LLM path. Calls are parallelized in-handler but Claude
+            # tail latency + retry storms still occasionally cross 5
+            # min when the deck is large or rate-limited. 10 min is
+            # still well under the 15 min Lambda hard cap.
+            timeout=cdk.Duration.minutes(10),
             ephemeral_storage_size=cdk.Size.gibibytes(2),
             vpc=self.vpc,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS),
