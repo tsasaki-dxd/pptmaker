@@ -394,12 +394,17 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
         )
 
         skipped: list[int] = []
+        # Running counter over section_divider slides so the "SECTION
+        # NN" label counts up 01 / 02 / 03 … instead of every divider
+        # reading the template's baked-in "01".
+        section_counter = 0
         for i, (slide, src_xml) in enumerate(
             zip(blueprint_slides, xmls, strict=True), start=1
         ):
+            layout = slide.get("layout", "content")
             req = RenderRequest(
                 slide_index=i,
-                layout=slide.get("layout", "content"),
+                layout=layout,
                 figure_type=slide.get("figure_type"),
                 content=slide.get("content", {}),
             )
@@ -408,6 +413,11 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
 
             spec = _collect_designer_result(designer_futures, i)
             extra_shapes_xml = _emit_spec_if_any(spec, start_shape_id=1000 + 100 * i)
+
+            section_index: int | None = None
+            if layout == "section_divider":
+                section_counter += 1
+                section_index = section_counter
 
             try:
                 xmls[i - 1] = render_content_slide(
@@ -419,6 +429,7 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
                     slide_size=slide_size,
                     total_slides=len(blueprint_slides),
                     extra_shapes_xml=extra_shapes_xml,
+                    section_index=section_index,
                 )
             except Exception:
                 # Leave the unmodified template XML in place for this
