@@ -321,9 +321,18 @@ class AppStack(cdk.Stack):
                 # template's theme.xml instead of always using DEFAULT_PALETTE).
                 "FF_SLOT_RENDER": "1",
                 "FF_THEME_INHERITANCE": "1",
+                # Phase 3: per-slide layout designer LLM. When on, each
+                # slide's body area is composed by Claude from the
+                # LayoutSpec primitive vocabulary instead of the
+                # generic figure_renderer presets. The render Lambda
+                # falls back to the deterministic path automatically
+                # if the LLM call or validation fails.
+                "FF_LAYOUT_DESIGNER": "1",
+                "ANTHROPIC_API_KEY_SECRET": anthropic_secret.secret_name,
             },
         )
         self.artifacts_bucket.grant_read_write(self.render_function)
+        anthropic_secret.grant_read(self.render_function)
         self.db_secret.grant_read(self.render_function)
         self.render_function.add_event_source(
             lambda_events.SqsEventSource(self.render_queue, batch_size=1)
