@@ -61,13 +61,10 @@ def _check_patch_safety(
     patch: list[dict[str, Any]],
     slide_index: int | None = None,
 ) -> None:
-    if slide_index is not None:
-        # When scoping, only /slides/{i} and its descendants are allowed.
-        # "/slides/{i}" exact, "/slides/{i}/..." subtree. Reject add/remove
-        # on neighbours and anything outside the slides array.
-        scope = f"/slides/{slide_index - 1}"
-    else:
-        scope = None
+    # When scoping, only /slides/{i} and its descendants are allowed
+    # ("/slides/{i}" exact or "/slides/{i}/..." subtree). Anything else
+    # — neighbour slides, /title, /design_tokens — is rejected.
+    scope = f"/slides/{slide_index - 1}" if slide_index is not None else None
 
     for op in patch:
         if op.get("op") not in ALLOWED_OPS:

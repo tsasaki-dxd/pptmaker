@@ -359,12 +359,13 @@ def revise(
 
     # Validate slide_index against the current blueprint before spending
     # an LLM call; caller passed an out-of-range index, fail fast.
-    if body.slide_index is not None:
-        if body.slide_index < 1 or body.slide_index > len(current.slides):
-            raise HTTPException(
-                400,
-                f"slide_index {body.slide_index} out of range (1..{len(current.slides)})",
-            )
+    if body.slide_index is not None and (
+        body.slide_index < 1 or body.slide_index > len(current.slides)
+    ):
+        raise HTTPException(
+            400,
+            f"slide_index {body.slide_index} out of range (1..{len(current.slides)})",
+        )
 
     llm = LLMClient()
     try:
