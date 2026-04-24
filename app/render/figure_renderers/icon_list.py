@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..shapes import rect_shape, text_box
+from ..shapes import fit_stack, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
@@ -49,9 +49,15 @@ class IconListRenderer(FigureRenderer):
         n = len(items)
         accents = (p.purple, p.purple_dk, p.amber, p.green, p.purple_lt, p.muted)
 
-        gap = 60000
-        row_h = (container.h - gap * (n - 1)) // n
-        icon_sz = min(row_h - 40000, 520000)
+        row_h, gap = fit_stack(
+            container_h=container.h,
+            n=n,
+            natural_h=720000,
+            min_h=240000,
+            gap=60000,
+            min_gap=10000,
+        )
+        icon_sz = max(120000, min(row_h - 40000, 520000))
 
         shapes: list[str] = []
         sid = ctx.next_shape_id
@@ -104,6 +110,7 @@ class IconListRenderer(FigureRenderer):
                     bold=True,
                     color=p.purple_dk,
                     font=ctx.font,
+                    auto_fit=True,
                 )
             )
             sid += 1
@@ -120,6 +127,7 @@ class IconListRenderer(FigureRenderer):
                         size_pt=10,
                         color=p.dark,
                         font=ctx.font,
+                        auto_fit=True,
                     )
                 )
                 sid += 1

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..shapes import h_line, rect_shape, text_box
+from ..shapes import fit_stack, h_line, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
@@ -123,8 +123,14 @@ class CostBreakdownRenderer(FigureRenderer):
         sid += 1
 
         n = len(items)
-        row_gap = 40000
-        row_h = (body_h - row_gap * max(0, n - 1)) // max(1, n)
+        row_h, row_gap = fit_stack(
+            container_h=body_h,
+            n=n,
+            natural_h=460000,
+            min_h=180000,
+            gap=40000,
+            min_gap=10000,
+        )
         label_w = container.w * 30 // 100
         amount_w = container.w * 18 // 100
         bar_track_x = container.x + label_w + 40000
@@ -137,7 +143,7 @@ class CostBreakdownRenderer(FigureRenderer):
         for i, it in enumerate(items):
             amt = float(it["amount"])
             y = body_y + (row_h + row_gap) * i
-            bar_h = min(row_h - 80000, 280000)
+            bar_h = max(60000, min(row_h - 80000, 280000))
             by = y + (row_h - bar_h) // 2
             bw = max(round(bar_track_w * (amt / max_amt)), 20000)
 
@@ -154,6 +160,7 @@ class CostBreakdownRenderer(FigureRenderer):
                     bold=True,
                     color=p.black,
                     font=ctx.font,
+                    auto_fit=True,
                 )
             )
             sid += 1

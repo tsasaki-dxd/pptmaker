@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..shapes import rect_outline, rect_shape, text_box
+from ..shapes import fit_stack, rect_outline, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
@@ -76,9 +76,17 @@ class GanttRenderer(FigureRenderer):
 
         week_w = grid_w // max(1, total_weeks)
         n = len(tasks)
-        gap = 40000
-        row_h = (grid_h - gap * max(0, n - 1)) // max(1, n)
-        bar_h = min(row_h - 40000, 320000)
+        # row_h shrinks proportionally past natural via fit_stack so
+        # 10-task gantts don't crash into the bottom of the grid.
+        row_h, row_gap = fit_stack(
+            container_h=grid_h,
+            n=n,
+            natural_h=420000,
+            min_h=140000,
+            gap=40000,
+            min_gap=10000,
+        )
+        bar_h = max(80000, min(row_h - 40000, 320000))
 
         group_palette = (p.purple, p.purple_dk, p.amber, p.green, p.purple_lt, p.muted)
         group_colors: dict[str, str] = {}
@@ -128,7 +136,7 @@ class GanttRenderer(FigureRenderer):
                 sid += 1
 
         for i, task in enumerate(tasks):
-            y = grid_y + (row_h + gap) * i
+            y = grid_y + (row_h + row_gap) * i
             shapes.append(
                 text_box(
                     sid,
