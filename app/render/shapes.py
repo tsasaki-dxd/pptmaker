@@ -169,6 +169,60 @@ def _xml_escape(s: str) -> str:
     )
 
 
+def fit_stack(
+    container_h: int,
+    n: int,
+    *,
+    natural_h: int,
+    min_h: int,
+    gap: int = 0,
+    min_gap: int = 0,
+    header_h: int = 0,
+    footer_h: int = 0,
+) -> tuple[int, int]:
+    """Compute ``(item_h, gap)`` for an N-item vertical stack that fits
+    inside ``container_h`` after reserving ``header_h`` + ``footer_h``.
+
+    Algorithm:
+      1. Try the natural sizes; if the stack already fits, return them.
+      2. Shrink the gap toward ``min_gap`` first (keeps elements at their
+         natural height; only the breathing room collapses).
+      3. If still too tall, shrink ``item_h`` toward ``min_h``,
+         distributing the remaining vertical space evenly among items.
+      4. Floor at ``(min_h, min_gap)`` — caller decides whether to drop
+         items, switch layout, or accept a tight render. The PoC pattern
+         for slide15 (bar_h 0.4→0.32, gap 0.12→0.08) is exactly this:
+         shrink gap, then height, until the stack fits.
+
+    `n=0` returns `(0, 0)`. `n=1` ignores `gap` and clamps the single
+    item to the available height (capped at `natural_h`).
+    """
+    if n <= 0:
+        return (0, 0)
+
+    available = max(0, container_h - header_h - footer_h)
+    if available <= 0:
+        return (max(min_h, 0), max(min_gap, 0))
+
+    if n == 1:
+        item_h = min(natural_h, available)
+        return (max(min_h, item_h), 0)
+
+    natural_total = n * natural_h + (n - 1) * gap
+    if natural_total <= available:
+        return (natural_h, gap)
+
+    # Step 1: collapse gap toward min_gap before touching item heights.
+    reduced_total = n * natural_h + (n - 1) * min_gap
+    if reduced_total <= available:
+        return (natural_h, min_gap)
+
+    # Step 2: distribute the remaining height evenly into items.
+    item_h = (available - (n - 1) * min_gap) // n
+    item_h = max(min_h, item_h)
+    return (item_h, min_gap)
+
+
 def rect_shape(
     sp_id: int,
     name: str,
@@ -229,6 +283,17 @@ def rect_outline(
     )
 
 
+def _body_pr(auto_fit: bool, anchor: str = "t") -> str:
+    """Render the <a:bodyPr> tag, optionally with normAutofit so
+    PowerPoint shrinks the text to fit the shape when overflow would
+    otherwise clip it. PoC slides hand-tuned font sizes to avoid clip;
+    this is the productized safety net for renderers that opt in.
+    """
+    if auto_fit:
+        return f'<a:bodyPr wrap="square" anchor="{anchor}"><a:normAutofit/></a:bodyPr>'
+    return f'<a:bodyPr wrap="square" anchor="{anchor}"/>'
+
+
 def text_box(
     sp_id: int,
     name: str,
@@ -242,6 +307,7 @@ def text_box(
     color: str = DEFAULT_PALETTE.black,
     font: str = DEFAULT_FONT,
     align: str = "l",
+    auto_fit: bool = False,
 ) -> str:
     """Single-run text box."""
     x, y, w, h = _i(x), _i(y), _i(w), _i(h)
@@ -253,7 +319,7 @@ def text_box(
         f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
         f"<a:noFill/>"
         f"</p:spPr>"
-        f'<p:txBody><a:bodyPr wrap="square" anchor="t"/><a:lstStyle/>'
+        f"<p:txBody>{_body_pr(auto_fit)}<a:lstStyle/>"
         f'<a:p><a:pPr algn="{align}"/>'
         f"{_run(text, size_pt, bold, color, font)}"
         f"</a:p></p:txBody>"
@@ -271,6 +337,7 @@ def text_box_multi(
     runs: list[tuple[str, int, bool, str]],
     font: str = DEFAULT_FONT,
     align: str = "l",
+    auto_fit: bool = False,
 ) -> str:
     """Multi-run text box. runs: list of (text, size_pt, bold, color)."""
     x, y, w, h = _i(x), _i(y), _i(w), _i(h)
@@ -283,7 +350,7 @@ def text_box_multi(
         f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
         f"<a:noFill/>"
         f"</p:spPr>"
-        f'<p:txBody><a:bodyPr wrap="square" anchor="t"/><a:lstStyle/>'
+        f"<p:txBody>{_body_pr(auto_fit)}<a:lstStyle/>"
         f'<a:p><a:pPr algn="{align}"/>'
         f"{body_runs}"
         f"</a:p></p:txBody>"
