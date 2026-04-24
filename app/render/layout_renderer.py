@@ -389,6 +389,7 @@ def render_content_slide(
     slide_size: tuple[int, int] | None = None,
     total_slides: int | None = None,
     extra_shapes_xml: list[str] | None = None,
+    section_index: int | None = None,
 ) -> str:
     """Return updated slide XML with:
       1. Title placeholder text replaced.
@@ -445,6 +446,13 @@ def render_content_slide(
     # template fed into a 16-slide deck doesn't keep showing "/ 06".
     if total_slides is not None:
         out = _replace_page_counter(out, req.slide_index, total_slides)
+
+    # Section divider: rewrite "SECTION NN" to match the actual
+    # section this divider opens. Only applies when the caller knows
+    # the slide's section index (handler.py counts section_divider
+    # slides as it iterates).
+    if section_index is not None and req.layout == "section_divider":
+        out = _replace_section_number(out, section_index)
 
     # TOC slides: populate the template's "項目タイトル" slots with the
     # blueprint's item list before the generic prompt stripper runs
@@ -1078,6 +1086,9 @@ def _strip_prompt_decoration(slide_xml: str) -> str:
 
 
 _PAGE_COUNTER_RE = re.compile(r"<a:t>\s*(\d{1,3})\s*/\s*(\d{1,3})\s*</a:t>")
+_SECTION_NUMBER_RE = re.compile(
+    r"<a:t>\s*(SECTION|Section|section)(\s+)(\d{1,3})\s*</a:t>"
+)
 
 
 def _replace_page_counter(slide_xml: str, current: int, total: int) -> str:
@@ -1099,6 +1110,26 @@ def _replace_page_counter(slide_xml: str, current: int, total: int) -> str:
         return replacement
 
     return _PAGE_COUNTER_RE.sub(_rep, slide_xml)
+
+
+def _replace_section_number(slide_xml: str, section_index: int) -> str:
+    """Rewrite the section-divider label "SECTION NN" to reflect the
+    actual section this divider marks.
+
+    Templates ship the label with a fixed "SECTION  01" string baked
+    into the slide XML. When a deck has multiple section dividers, we
+    need the label to count up — 01 / 02 / 03 — or every divider
+    still reads "01" in the rendered PPTX. The regex preserves the
+    original whitespace between the keyword and the digits so the
+    two-space convention the DXDesignSystem template uses survives.
+    """
+
+    def _rep(m: re.Match) -> str:
+        keyword = m.group(1)
+        gap = m.group(2)
+        return f"<a:t>{keyword}{gap}{section_index:02d}</a:t>"
+
+    return _SECTION_NUMBER_RE.sub(_rep, slide_xml)
 
 
 def _detect_body_rect(slide_xml: str) -> tuple[int, int, int, int] | None:
