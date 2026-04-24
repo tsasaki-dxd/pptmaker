@@ -952,6 +952,7 @@ def _replace_toc_items(slide_xml: str, items: list[str]) -> str:
             base = orig if _XFRM_RE.search(orig) else template_anchor_block
             new_anchor = _replace_first_a_t(base, text)
             new_anchor = _write_xfrm(new_anchor, first_x, new_anchor_y, first_w, item_h)
+            new_anchor = _ensure_autofit_on_block(new_anchor)
             new_blocks[a_idx] = new_anchor
 
             comp = number_companions[i]
@@ -992,6 +993,7 @@ def _replace_toc_items(slide_xml: str, items: list[str]) -> str:
             anchor_clone = _write_xfrm(
                 anchor_clone, first_x, new_anchor_y, first_w, item_h
             )
+            anchor_clone = _ensure_autofit_on_block(anchor_clone)
             appended_clones.append(anchor_clone)
             if template_number_block is not None and template_number_offset is not None:
                 dx, dy, nw, nh = template_number_offset

@@ -111,6 +111,14 @@ def _sanitize(obj: Any) -> None:
         _enforce_headline_message(slides[i - 1])
         _check_headline_not_title_restate(slides[i - 1])
 
+    # Post-pass: align the TOC slide's items with the actual
+    # section_divider slides present in the blueprint. The LLM often
+    # produces a 9-item TOC but only 5 section_divider slides (or
+    # vice versa); keeping them out of sync means the rendered TOC
+    # promises sections the deck never gets to. Source of truth =
+    # section_divider slide titles; TOC items just mirror them.
+    _align_toc_with_section_dividers(slides)
+
 
 # Keys that identify the figure-data payload for a given figure_type.
 # Where the payload is spread across multiple top-level keys (swot,
@@ -219,6 +227,54 @@ def _apply_slot_sanitize(slide: dict[str, Any]) -> dict[str, Any]:
     new_slide = dict(slide)
     new_slide["content"] = new_content
     return new_slide
+
+
+def _align_toc_with_section_dividers(slides: list[Any]) -> None:
+    """Overwrite the TOC slide's content.items with titles harvested
+    from each section_divider slide in document order.
+
+    The LLM's TOC list and the actual section_divider coverage drift
+    apart often enough that it's worth fixing at the builder layer:
+
+      * LLM promises 9 items but only generates 5 dividers → rendered
+        TOC advertises sections that never appear
+      * LLM writes 7 dividers but only 4 TOC items → skeleton review
+        hides the full structure from the user
+
+    Canonical answer: the **section_dividers are the structure**;
+    the TOC is a table-of-contents *reflecting* that structure. So
+    we rewrite content.items on the toc slide (if any) from the
+    ordered list of section_divider titles. slots.items is kept in
+    sync so the slot-aware renderer path also works.
+
+    Safe to call multiple times; idempotent when already aligned.
+    """
+    toc_idx: int | None = None
+    divider_titles: list[str] = []
+    for i, s in enumerate(slides):
+        if not isinstance(s, dict):
+            continue
+        layout = s.get("layout")
+        if layout == "toc" and toc_idx is None:
+            toc_idx = i
+        elif layout == "section_divider":
+            title = s.get("content", {}).get("title")
+            if isinstance(title, str) and title.strip():
+                divider_titles.append(title.strip())
+
+    if toc_idx is None or not divider_titles:
+        return
+
+    toc = slides[toc_idx]
+    content = toc.get("content")
+    if not isinstance(content, dict):
+        content = {}
+        toc["content"] = content
+    content["items"] = divider_titles
+
+    slots = content.get("slots")
+    if isinstance(slots, dict):
+        slots["items"] = list(divider_titles)
 
 
 def _enforce_headline_message(slide: dict[str, Any]) -> None:
