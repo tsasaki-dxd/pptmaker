@@ -147,16 +147,204 @@ def palette_from_theme(theme: Theme) -> Palette:
     )
 
 
-def _run(text: str, size_pt: int, bold: bool, color: str, font: str) -> str:
+def _run(
+    text: str,
+    size_pt: int,
+    bold: bool,
+    color: str,
+    font: str,
+    *,
+    italic: bool = False,
+    underline: bool = False,
+) -> str:
     b = "1" if bold else "0"
+    i_attr = ' i="1"' if italic else ""
+    u_attr = ' u="sng"' if underline else ""
     return (
-        f'<a:r><a:rPr lang="ja-JP" sz="{size_pt * 100}" b="{b}">'
+        f'<a:r><a:rPr lang="ja-JP" sz="{size_pt * 100}" b="{b}"{i_attr}{u_attr}>'
         f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
         f'<a:latin typeface="{font}"/>'
         f'<a:ea typeface="{font}"/>'
         f"</a:rPr>"
         f"<a:t>{_xml_escape(text)}</a:t></a:r>"
     )
+
+
+@dataclass(frozen=True)
+class TextRun:
+    """One styled text run inside a paragraph."""
+
+    text: str
+    size_pt: int = 11
+    bold: bool = False
+    italic: bool = False
+    underline: bool = False
+    color: str = "111111"
+
+
+@dataclass(frozen=True)
+class TextParagraph:
+    """One paragraph (logical line / bullet) inside a text frame.
+
+    `bullet` controls the leading marker:
+      * None   → no bullet, plain paragraph
+      * "•"    → unicode bullet character (or any single-char string)
+      * "1."   → arabic-period auto-numbering (continues across paragraphs)
+    `indent_level` (0–8) controls left margin / nesting; renderer uses
+    285750 EMU per level (PowerPoint's default).
+    `line_spacing_pct` is 100 = single, 150 = 1.5×, etc.
+    `align` matches PPTX values: "l" / "ctr" / "r" / "just".
+    """
+
+    runs: tuple[TextRun, ...] = ()
+    align: str = "l"
+    indent_level: int = 0
+    bullet: str | None = None
+    line_spacing_pct: int = 100
+    space_before_pt: int = 0
+    space_after_pt: int = 0
+
+
+def _render_paragraph(p: TextParagraph, font: str) -> str:
+    ppr_attrs: list[str] = [f'algn="{p.align}"']
+    if p.indent_level > 0:
+        ppr_attrs.append(f'marL="{285750 * p.indent_level}"')
+        ppr_attrs.append(f'lvl="{p.indent_level}"')
+    if p.bullet:
+        # Hanging indent so wrapped lines align under the text, not the bullet.
+        if p.indent_level == 0:
+            ppr_attrs.append('marL="285750"')
+        ppr_attrs.append('indent="-285750"')
+
+    children: list[str] = []
+    if p.line_spacing_pct != 100:
+        children.append(f'<a:lnSpc><a:spcPct val="{p.line_spacing_pct * 1000}"/></a:lnSpc>')
+    if p.space_before_pt:
+        children.append(f'<a:spcBef><a:spcPts val="{p.space_before_pt * 100}"/></a:spcBef>')
+    if p.space_after_pt:
+        children.append(f'<a:spcAft><a:spcPts val="{p.space_after_pt * 100}"/></a:spcAft>')
+    if p.bullet:
+        if p.bullet.endswith(".") and p.bullet.rstrip(".").isdigit():
+            children.append('<a:buAutoNum type="arabicPeriod"/>')
+        else:
+            children.append(f'<a:buChar char="{_xml_escape(p.bullet)}"/>')
+
+    if children:
+        ppr = f'<a:pPr {" ".join(ppr_attrs)}>{"".join(children)}</a:pPr>'
+    else:
+        ppr = f'<a:pPr {" ".join(ppr_attrs)}/>'
+
+    runs_xml = "".join(
+        _run(
+            r.text,
+            r.size_pt,
+            r.bold,
+            r.color,
+            font,
+            italic=r.italic,
+            underline=r.underline,
+        )
+        for r in p.runs
+    )
+    return f"<a:p>{ppr}{runs_xml}</a:p>"
+
+
+def text_box_paragraphs(
+    sp_id: int,
+    name: str,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    paragraphs: list[TextParagraph] | tuple[TextParagraph, ...],
+    *,
+    font: str = DEFAULT_FONT,
+    anchor: str = "t",
+    auto_fit: bool = False,
+) -> str:
+    """Multi-paragraph text box.
+
+    Each TextParagraph maps to one `<a:p>` so line breaks, bullet
+    markers, indent levels, line spacing and per-paragraph alignment
+    work the way PowerPoint expects. `anchor` is vertical alignment
+    ("t" / "ctr" / "b") inside the shape.
+    """
+    x, y, w, h = _i(x), _i(y), _i(w), _i(h)
+    body = "".join(_render_paragraph(p, font) for p in paragraphs)
+    return (
+        f'<p:sp><p:nvSpPr><p:cNvPr id="{sp_id}" name="{_xml_escape(name)}"/>'
+        f'<p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr>'
+        f"<p:spPr>"
+        f'<a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{w}" cy="{h}"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f"<a:noFill/>"
+        f"</p:spPr>"
+        f"<p:txBody>{_body_pr(auto_fit, anchor)}<a:lstStyle/>"
+        f"{body}"
+        f"</p:txBody>"
+        f"</p:sp>"
+    )
+
+
+def round_rect_shape(
+    sp_id: int,
+    name: str,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    fill_color: str,
+    *,
+    corner_radius_pct: int = 25,
+    line_color: str | None = None,
+    line_width_emu: int = 0,
+) -> str:
+    """Filled rectangle with custom rounded corners.
+
+    `corner_radius_pct` 0..50: 0 → sharp corners (equivalent to
+    rect_shape), 50 → fully rounded (a square becomes a circle, a
+    horizontal rectangle becomes a pill). Values map to OOXML's
+    `roundRect` adj range 0..50000 (1000ths of a percent of half the
+    shorter side).
+    """
+    x, y, w, h = _i(x), _i(y), _i(w), _i(h)
+    radius = max(0, min(50, int(corner_radius_pct)))
+    av_lst = f'<a:gd name="adj" fmla="val {radius * 1000}"/>'
+    ln = ""
+    if line_color:
+        ln = (
+            f'<a:ln w="{_i(line_width_emu)}">'
+            f'<a:solidFill><a:srgbClr val="{line_color}"/></a:solidFill>'
+            f"</a:ln>"
+        )
+    return (
+        f'<p:sp><p:nvSpPr><p:cNvPr id="{sp_id}" name="{_xml_escape(name)}"/>'
+        f'<p:cNvSpPr/><p:nvPr/></p:nvSpPr>'
+        f"<p:spPr>"
+        f'<a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{w}" cy="{h}"/></a:xfrm>'
+        f'<a:prstGeom prst="roundRect"><a:avLst>{av_lst}</a:avLst></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{fill_color}"/></a:solidFill>'
+        f"{ln}"
+        f"</p:spPr>"
+        f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
+        f"</p:sp>"
+    )
+
+
+def resolve_palette_color(token: str, palette: Palette | None = None) -> str:
+    """Accept either a 6-char HEX color (returned uppercase) or a
+    palette field name ("purple" / "muted" / "amber" / etc.) and
+    return the resolved HEX. Lets LLM specs use semantic color names
+    instead of pinning HEXes that should follow the active theme.
+    Unknown tokens fall back to the palette's `purple`.
+    """
+    s = token.strip()
+    if len(s) == 6 and all(c in "0123456789abcdefABCDEF" for c in s):
+        return s.upper()
+    if s.startswith("#") and len(s) == 7:
+        return s[1:].upper()
+    pal = palette or DEFAULT_PALETTE
+    return getattr(pal, s, pal.purple)
 
 
 def _xml_escape(s: str) -> str:
