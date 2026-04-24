@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { api, type TemplateProfile } from '@/lib/api';
+import { LoadingOverlay } from '@/components/LoadingOverlay';
 
 export default function TemplatesPage() {
   const [name, setName] = useState('');
@@ -126,6 +127,11 @@ export default function TemplatesPage() {
           </ul>
         )}
       </div>
+
+      <LoadingOverlay
+        when={uploading || list === null}
+        label={uploading ? (status || 'アップロード中...') : '読み込み中...'}
+      />
     </section>
   );
 }

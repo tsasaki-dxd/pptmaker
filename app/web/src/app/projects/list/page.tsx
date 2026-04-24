@@ -3,11 +3,16 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { api, type Project } from '@/lib/api';
+import { LoadingOverlay } from '@/components/LoadingOverlay';
 
 export default function ProjectsListPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // True until the first refresh() resolves. Separate from `busy`
+  // (which tracks user-initiated operations) so the initial page
+  // mount shows "読み込み中..." while the projects list is en route.
+  const [listLoading, setListLoading] = useState(true);
   const [previewModal, setPreviewModal] = useState<{
     projectName: string;
     slides: { slide_index: number; url: string }[];
@@ -20,6 +25,8 @@ export default function ProjectsListPage() {
       setError(null);
     } catch (e) {
       setError(`一覧取得失敗: ${String(e)}`);
+    } finally {
+      setListLoading(false);
     }
   }, []);
 
@@ -141,6 +148,11 @@ export default function ProjectsListPage() {
           onClose={() => setPreviewModal(null)}
         />
       )}
+
+      <LoadingOverlay
+        when={busy || listLoading}
+        label={listLoading ? '読み込み中...' : '処理中...'}
+      />
     </section>
   );
 }
