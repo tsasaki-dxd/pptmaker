@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..shapes import fit_stack, rect_outline, rect_shape, text_box
+from ..shapes import (
+    TextParagraph,
+    TextRun,
+    fit_stack,
+    rect_outline,
+    rect_shape,
+    text_box_paragraphs,
+)
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
@@ -28,9 +35,21 @@ class OrgChartRenderer(FigureRenderer):
     figure_type = "org_chart"
     description = (
         "Org chart (max 5 nodes, 3 levels). "
-        "content: {nodes: [{id, label, parent?}]}"
+        "content: {nodes: [{id, label, parent?, role?, members?}]}"
     )
-    input_schema_example: ClassVar[dict[str, Any]] = {}
+    input_schema_example: ClassVar[dict[str, Any]] = {
+        "nodes": [
+            {"id": "po", "label": "プロジェクトオーナー", "role": "責任者", "members": "1名"},
+            {"id": "pm", "label": "プロジェクトマネージャー", "parent": "po",
+             "role": "統括リード", "members": "1名"},
+            {"id": "dx", "label": "DX戦略チーム", "parent": "pm",
+             "role": "戦略立案", "members": "3名"},
+            {"id": "biz", "label": "業務改革チーム", "parent": "pm",
+             "role": "業務分析", "members": "4名"},
+            {"id": "tech", "label": "技術・データチーム", "parent": "pm",
+             "role": "実装支援", "members": "3名"},
+        ]
+    }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
         errors: list[str] = []
@@ -124,24 +143,67 @@ class OrgChartRenderer(FigureRenderer):
                     )
                 )
                 sid += 1
+                # Build label paragraphs: main label + optional role /
+                # members line. Use text_box_paragraphs so the two lines
+                # stack cleanly within one vertically-centered box.
+                role = node.get("role") if isinstance(node.get("role"), str) else None
+                members = (
+                    node.get("members")
+                    if isinstance(node.get("members"), (str, int))
+                    else None
+                )
+                members_str = str(members) if members not in (None, "") else None
+
+                paragraphs = [
+                    TextParagraph(
+                        runs=(
+                            TextRun(
+                                text=node["label"],
+                                size_pt=11,
+                                bold=True,
+                                color=p.purple_dk,
+                            ),
+                        ),
+                        align="ctr",
+                    )
+                ]
+                subtitle_parts: list[str] = []
+                if role:
+                    subtitle_parts.append(role)
+                if members_str:
+                    subtitle_parts.append(members_str)
+                if subtitle_parts:
+                    paragraphs.append(
+                        TextParagraph(
+                            runs=(
+                                TextRun(
+                                    text=" / ".join(subtitle_parts),
+                                    size_pt=9,
+                                    color=p.muted,
+                                ),
+                            ),
+                            align="ctr",
+                            space_before_pt=2,
+                        )
+                    )
+
                 # Cap the label box height to box_h so it never extends
-                # past the rectangle behind it (was 360000 fixed, broke
-                # when fit_stack pushed box_h below 360000).
-                label_h = min(360000, max(160000, box_h - 40000))
+                # past the rectangle behind it. When we have a subtitle
+                # give it more room; single-line labels keep the older
+                # tighter 360k cap.
+                label_natural_h = 540000 if subtitle_parts else 360000
+                label_h = min(label_natural_h, max(160000, box_h - 40000))
                 shapes.append(
-                    text_box(
+                    text_box_paragraphs(
                         sid,
                         f"org-lbl-{node['id']}",
                         bx + 80000,
                         box_y + (box_h - label_h) // 2,
                         box_w - 160000,
                         label_h,
-                        node["label"],
-                        size_pt=11,
-                        bold=True,
-                        color=p.purple_dk,
-                        align="ctr",
+                        paragraphs,
                         font=ctx.font,
+                        anchor="ctr",
                         auto_fit=True,
                     )
                 )
