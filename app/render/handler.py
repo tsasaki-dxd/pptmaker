@@ -195,6 +195,14 @@ def _resolve_template_meta(job: RenderJob) -> Any | None:
 # that even with the 5-15s per-call duration we've seen.
 _DESIGNER_MAX_CONCURRENCY = 8
 
+# Only content-layout slides get handed to the layout-designer LLM.
+# Cover / toc / section_divider / about / disclaimer are structural
+# pages whose deterministic rendering already matches the template —
+# running an LLM over them just burns cost and latency for no visible
+# change, and risks the designer producing shapes that conflict with
+# the template's own decoration on those pages.
+_DESIGNER_ELIGIBLE_LAYOUTS: frozenset[str] = frozenset({"content"})
+
 
 def _submit_designer_batch(
     *,
@@ -227,7 +235,17 @@ def _submit_designer_batch(
     for i, slide in enumerate(blueprint_slides, start=1):
         layout = slide.get("layout", "content")
         page_meta = template_meta.page_for(layout)
-        if page_meta is None or page_meta.body_box is None:
+        # Skip unless the layout is explicitly designer-eligible AND
+        # the template exposes a body_box for it. Either check alone
+        # would let one misconfiguration (layout typo, stray body_box
+        # in the wrong page entry) accidentally route template-
+        # decoration pages through the LLM.
+        eligible = (
+            layout in _DESIGNER_ELIGIBLE_LAYOUTS
+            and page_meta is not None
+            and page_meta.body_box is not None
+        )
+        if not eligible:
             # Pre-resolved None so the render loop doesn't have to
             # special-case "no future submitted for this slide".
             done: Future[Any] = Future()
