@@ -388,6 +388,7 @@ def render_content_slide(
     theme_pptx_bytes: bytes | None = None,
     slide_size: tuple[int, int] | None = None,
     total_slides: int | None = None,
+    extra_shapes_xml: list[str] | None = None,
 ) -> str:
     """Return updated slide XML with:
       1. Title placeholder text replaced.
@@ -466,6 +467,17 @@ def render_content_slide(
     out = _strip_unused_title_prompts(out)
 
     effective_palette = _resolve_palette(palette, theme_pptx_bytes)
+
+    # extra_shapes_xml takes precedence over the deterministic
+    # figure-renderer / slot pipelines: when the layout designer LLM
+    # produced a LayoutSpec for this slide, the caller emits the
+    # spec and hands the resulting shape XML in here. Body placeholders
+    # are still stripped so designer shapes don't sit on top of
+    # template prompt text.
+    if extra_shapes_xml:
+        out = _strip_body_placeholders(out)
+        out = _inject_shapes(out, extra_shapes_xml)
+        return out
 
     if _slot_render_enabled() and slots is not None:
         out = _strip_body_placeholders(out)

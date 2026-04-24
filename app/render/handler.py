@@ -32,7 +32,9 @@ from urllib.parse import urlparse
 import boto3
 
 from .db_status import update_project_status
+from .layout_designer import _designer_enabled, design_layout
 from .layout_renderer import RenderRequest, render_content_slide
+from .layout_spec import emit_layout_spec
 from .media import MediaRegistry
 from .pptx_assembler import (
     assign_default_template_indices,
@@ -46,6 +48,7 @@ from .pptx_assembler import (
 )
 from .preview import pdf_to_jpegs, pptx_to_pdf
 from .template_loader import repack, safe_unpack
+from .template_meta import load_template_meta
 
 log = logging.getLogger("slideforge.render")
 log.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
@@ -132,6 +135,106 @@ def _slide_size_from_tokens(
     return cx, cy
 
 
+def _build_designer_llm() -> Any | None:
+    """Construct an Anthropic SDK client. Returns ``None`` when
+    Anthropic isn't installed (unit-test environments) or no API key
+    is reachable; the render path falls back silently.
+    """
+    try:
+        from anthropic import Anthropic
+    except Exception:
+        log.exception("anthropic SDK unavailable; layout designer disabled")
+        return None
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        secret_name = os.environ.get("ANTHROPIC_API_KEY_SECRET")
+        if secret_name:
+            try:
+                sm = boto3.client(
+                    "secretsmanager",
+                    region_name=os.environ.get("AWS_REGION", "ap-northeast-1"),
+                )
+                api_key = sm.get_secret_value(SecretId=secret_name)["SecretString"]
+            except Exception:
+                log.exception(
+                    "failed to fetch Anthropic API key from secret %s; "
+                    "layout designer disabled",
+                    secret_name,
+                )
+                return None
+    if not api_key:
+        log.warning("no Anthropic API key available; layout designer disabled")
+        return None
+
+    try:
+        return Anthropic(api_key=api_key)
+    except Exception:
+        log.exception("Anthropic client init failed; layout designer disabled")
+        return None
+
+
+def _resolve_template_meta(job: RenderJob) -> Any | None:
+    """Locate the curated template metadata (if any) for this render
+    job. ``design_tokens.template_id`` wins; otherwise fall back to
+    the first template id we have a JSON for so v1 single-template
+    deploys "just work" without explicit configuration.
+    """
+    template_id = None
+    if isinstance(job.design_tokens, dict):
+        template_id = job.design_tokens.get("template_id")
+    if not template_id:
+        # v1 fallback: assume DXDesignSystem when nothing better is
+        # available (the only template currently shipped).
+        template_id = "dxdesignsystem"
+    return load_template_meta(template_id)
+
+
+def _maybe_design_layout(
+    *,
+    slide: dict[str, Any],
+    req: RenderRequest,
+    src_xml: str,
+    template_meta: Any | None,
+    slide_size: tuple[int, int] | None,
+    designer_llm: Any | None,
+    start_shape_id: int,
+) -> list[str] | None:
+    """Run the LLM layout designer for this slide and return the
+    emitted shape XML, or None when the designer wasn't invoked /
+    failed validation. Caller passes the result to
+    ``render_content_slide(extra_shapes_xml=...)``.
+    """
+    if designer_llm is None or template_meta is None:
+        return None
+
+    page_meta = template_meta.page_for(req.layout)
+    if page_meta is None or page_meta.body_box is None:
+        # No body box defined for this layout (e.g. cover/about/
+        # disclaimer): designer doesn't apply, fall back to the
+        # template-as-is.
+        return None
+
+    body_rect = (
+        page_meta.body_box.x_emu,
+        page_meta.body_box.y_emu,
+        page_meta.body_box.w_emu,
+        page_meta.body_box.h_emu,
+    )
+
+    spec = design_layout(
+        slide=slide,
+        template_page_meta=page_meta.model_dump(mode="python"),
+        body_rect=body_rect,
+        llm=designer_llm,
+    )
+    if spec is None:
+        return None
+
+    fragments, _next_id = emit_layout_spec(spec, start_shape_id=start_shape_id)
+    return fragments
+
+
 def _process_job(job: RenderJob) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="slideforge-") as td:
         work = Path(td)
@@ -165,6 +268,12 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
         registry = MediaRegistry()
         slide_size = _slide_size_from_tokens(job.design_tokens)
 
+        # Optional layout-designer LLM. Only constructed when the flag
+        # is on so render Lambdas without an Anthropic API key
+        # configured don't try to import or hit the SDK.
+        designer_llm = _build_designer_llm() if _designer_enabled() else None
+        template_meta = _resolve_template_meta(job)
+
         skipped: list[int] = []
         for i, (slide, src_xml) in enumerate(
             zip(blueprint_slides, xmls, strict=True), start=1
@@ -177,6 +286,17 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
             )
             layout_entry = layout_by_index.get(chosen[i - 1]) or {}
             slots = list(layout_entry.get("slots") or [])
+
+            extra_shapes_xml = _maybe_design_layout(
+                slide=slide,
+                req=req,
+                src_xml=src_xml,
+                template_meta=template_meta,
+                slide_size=slide_size,
+                designer_llm=designer_llm,
+                start_shape_id=1000 + 100 * i,
+            )
+
             try:
                 xmls[i - 1] = render_content_slide(
                     src_xml,
@@ -186,6 +306,7 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
                     theme_pptx_bytes=theme_bytes,
                     slide_size=slide_size,
                     total_slides=len(blueprint_slides),
+                    extra_shapes_xml=extra_shapes_xml,
                 )
             except Exception:
                 # Leave the unmodified template XML in place for this

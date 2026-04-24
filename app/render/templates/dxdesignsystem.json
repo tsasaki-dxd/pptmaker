@@ -1,0 +1,249 @@
+{
+  "_comment": "Hand-curated metadata for DXDesignSystem_Template.pptx (10x5.625in widescreen). Each page entry tells the layout designer where it can place content (body_box) and which template shapes are kept versus stripped. EMU values were copied verbatim from the template's <a:xfrm> elements.",
+  "id": "dxdesignsystem",
+  "name": "DXDesignSystem 標準テンプレート",
+  "slide_size": {
+    "cx_emu": 9144000,
+    "cy_emu": 5143500,
+    "label": "16:9 widescreen 10x5.625in"
+  },
+  "design_tokens": {
+    "primary_hex": "8B7AB8",
+    "primary_dark_hex": "6B5C96",
+    "primary_lt_hex": "D9D1E8",
+    "muted_hex": "9B98A6",
+    "border_hex": "E8E6EC",
+    "bg_alt_hex": "FAFAFB",
+    "text_dark_hex": "3A3A42",
+    "amber_hex": "C4A05C",
+    "green_hex": "5E9B7F",
+    "title_font": "Noto Sans JP",
+    "body_font": "Noto Sans JP",
+    "title_pt_cover": 44,
+    "title_pt_section": 32,
+    "title_pt_content": 22,
+    "subtitle_pt": 11,
+    "body_pt": 10,
+    "label_pt": 9,
+    "footer_pt": 8
+  },
+  "page_footer": {
+    "_comment": "Slide-number / total counter present on every page bottom-right.",
+    "x_emu": 7955280,
+    "y_emu": 4846320,
+    "w_emu": 914400,
+    "h_emu": 182880,
+    "format": "{current:02d} / {total:02d}",
+    "color": "muted"
+  },
+  "pages": [
+    {
+      "index": 1,
+      "layout": "cover",
+      "title_box": {
+        "_comment": "「タイトルをここに入れる。」の置き場所。LLM はここに blueprint title を pt44 bold で入れる。",
+        "x_emu": 320040,
+        "y_emu": 2103120,
+        "w_emu": 8503920,
+        "h_emu": 2194560,
+        "anchor": "t",
+        "align": "l",
+        "size_pt": 44,
+        "bold": true,
+        "color": "text_dark"
+      },
+      "subtitle_box": {
+        "_comment": "「サブタイトル・コンセプト文を1〜2行で。」の置き場所。",
+        "x_emu": 4114800,
+        "y_emu": 4434840,
+        "w_emu": 4709160,
+        "h_emu": 274320,
+        "anchor": "t",
+        "align": "l",
+        "size_pt": 11,
+        "color": "muted"
+      },
+      "date_box": {
+        "_comment": "Top-right date stamp。フィルしない場合は削除推奨。",
+        "x_emu": 6492240,
+        "y_emu": 914400,
+        "w_emu": 2286000,
+        "h_emu": 182880,
+        "format": "YYYY.MM.DD",
+        "size_pt": 9,
+        "color": "muted"
+      },
+      "decorations_to_keep": [
+        "Text 0 (DX-DESIGN-SYSTEM ribbon)",
+        "Shape 1 (accent dot)",
+        "Text 3 (PRESENTATION / COVER label)",
+        "Shape 7 (vertical accent bar at left of title)"
+      ]
+    },
+    {
+      "index": 2,
+      "layout": "toc",
+      "title_box": {
+        "_comment": "「目次」固定値（書き換え不要）。blueprint title は通常使わない。",
+        "x_emu": 365760,
+        "y_emu": 1234440,
+        "w_emu": 2743200,
+        "h_emu": 914400,
+        "anchor": "t",
+        "align": "l",
+        "size_pt": 36,
+        "bold": true,
+        "color": "text_dark",
+        "default_text": "目次"
+      },
+      "intro_box": {
+        "x_emu": 365760,
+        "y_emu": 2651760,
+        "w_emu": 2743200,
+        "h_emu": 457200,
+        "size_pt": 9,
+        "color": "muted"
+      },
+      "items_band": {
+        "_comment": "TOC エントリの配置領域。各エントリは number(NN) + Japanese title + 区切り線。最大 5 個のテンプレ slot あり、blueprint items 数に応じて _replace_toc_items が再ピッチ + clone。",
+        "x_emu": 3703320,
+        "y_emu": 1124712,
+        "w_emu": 5074920,
+        "h_emu": 3677856,
+        "natural_pitch_emu": 713232,
+        "entry": {
+          "number_box": {
+            "dx_emu": 0,
+            "dy_emu": 18288,
+            "w_emu": 548640,
+            "h_emu": 274320,
+            "size_pt": 11,
+            "color": "primary"
+          },
+          "title_box": {
+            "dx_emu": 1143000,
+            "dy_emu": 0,
+            "w_emu": 3931920,
+            "h_emu": 548640,
+            "size_pt": 18,
+            "bold": true,
+            "color": "text_dark"
+          },
+          "rule_below_dy_emu": 621792,
+          "rule_color": "border"
+        }
+      },
+      "decorations_to_keep": [
+        "Text 0 (INDEX ribbon)",
+        "Shape 1 (accent dot)",
+        "Text 2 (C O N T E N T S small label)",
+        "Shape 5 (vertical line separator left of items)"
+      ]
+    },
+    {
+      "index": 3,
+      "layout": "section_divider",
+      "title_box": {
+        "_comment": "「セクションタイトル」(pt32 bold)。blueprint title (e.g. 「1. 課題認識」) を入れる。",
+        "x_emu": 5166360,
+        "y_emu": 1783080,
+        "w_emu": 3931920,
+        "h_emu": 868680,
+        "anchor": "t",
+        "align": "l",
+        "size_pt": 32,
+        "bold": true,
+        "color": "text_dark"
+      },
+      "section_number_box": {
+        "_comment": "「SECTION  01」(pt11 muted)。blueprint で section_index が指定されればそれ、なければ 1 始まりで自動採番。",
+        "x_emu": 5166360,
+        "y_emu": 1463040,
+        "w_emu": 3657600,
+        "h_emu": 274320,
+        "format": "SECTION  {index:02d}",
+        "size_pt": 11,
+        "color": "primary"
+      },
+      "description_box": {
+        "_comment": "「このセクションの概要を1〜2行で記述します。」(pt11 dark)。blueprint subtitle / lead を入れる。",
+        "x_emu": 5166360,
+        "y_emu": 2743200,
+        "w_emu": 3657600,
+        "h_emu": 731520,
+        "anchor": "t",
+        "align": "l",
+        "size_pt": 11,
+        "color": "text_dark",
+        "auto_fit": true
+      },
+      "read_estimate_box": {
+        "x_emu": 5166360,
+        "y_emu": 4389120,
+        "w_emu": 3657600,
+        "h_emu": 228600,
+        "format": "— 本セクションの読了目安 {minutes} 分",
+        "size_pt": 9,
+        "color": "muted"
+      },
+      "decorations_to_keep": [
+        "Text 0 (SECTION / CHAPTER ribbon)",
+        "Shape 1 (accent dot)",
+        "Shape 2 (vertical accent bar at left of section title)"
+      ]
+    },
+    {
+      "index": 4,
+      "layout": "content",
+      "title_box": {
+        "_comment": "「コンテンツタイトル」(pt22 bold)。",
+        "x_emu": 1463040,
+        "y_emu": 914400,
+        "w_emu": 7315200,
+        "h_emu": 457200,
+        "anchor": "t",
+        "align": "l",
+        "size_pt": 22,
+        "bold": true,
+        "color": "text_dark"
+      },
+      "title_label_box": {
+        "_comment": "「CONTENT」小ラベル。blueprint section_number で書き換え可。",
+        "x_emu": 365760,
+        "y_emu": 960120,
+        "w_emu": 1097280,
+        "h_emu": 365760,
+        "size_pt": 11,
+        "color": "primary",
+        "default_text": "CONTENT"
+      },
+      "title_underline_y_emu": 1417320,
+      "body_box": {
+        "_comment": "本文 / 図版 / 表 を配置する場所。LayoutSpec の shapes はこの領域内に収めるべし。",
+        "x_emu": 365760,
+        "y_emu": 1737360,
+        "w_emu": 8412480,
+        "h_emu": 2834640
+      },
+      "decorations_to_keep": [
+        "Text 0 (CONTENT ribbon)",
+        "Shape 1 (accent dot)",
+        "Shape 4 (horizontal rule under title)"
+      ],
+      "decorations_to_strip": [
+        "Text 5 (BODY label)",
+        "Text 6 (本文 / 図版 / 表をここに配置 prompt)"
+      ]
+    },
+    {
+      "index": 5,
+      "layout": "about",
+      "_comment": "Company profile page; 6-row company info table on the right side. Hand-fill at deploy time, no LLM customization for v1."
+    },
+    {
+      "index": 6,
+      "layout": "disclaimer",
+      "_comment": "Disclaimer page; 3-column legal text, hand-edit only."
+    }
+  ]
+}
