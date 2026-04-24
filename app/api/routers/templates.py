@@ -78,6 +78,7 @@ def create_template(
 def get_template(
     template_id: str,
     tenant_id: str = Depends(require_tenant),
+    refresh: bool = False,
     db: Session = Depends(get_session),
 ) -> TemplateProfile:
     row = (
@@ -89,8 +90,12 @@ def get_template(
     # (cover / toc / section_divider / content / about / disclaimer)
     # so step 2's dropdown can show a layout hint per option and the
     # blueprint worker can assign defaults by type instead of cycling.
-    # Skipped if already populated.
-    if not row.template_slide_count or not row.layouts:
+    # Skipped if already populated — unless ?refresh=1 is passed, which
+    # forces a re-analyze so templates classified by an older heuristic
+    # (missing SECTION / セクション cues, nested-rect slot format) can
+    # be migrated without a delete + re-upload.
+    needs_analyze = refresh or not row.template_slide_count or not row.layouts
+    if needs_analyze:
         analysis = analyze_template(row.original_s3_path)
         if analysis and analysis.slide_count > 0:
             row.template_slide_count = analysis.slide_count
