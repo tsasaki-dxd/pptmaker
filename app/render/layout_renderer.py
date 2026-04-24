@@ -19,6 +19,7 @@ from .shapes import (
     DEFAULT_PALETTE,
     Palette,
     _xml_escape,
+    fit_stack,
     inch,
     palette_from_theme,
 )
@@ -562,25 +563,163 @@ def _replace_title(slide_xml: str, title: str) -> str:
     return _SP_BLOCK_RE.sub(_pass2, out)
 
 
+_XFRM_RE = re.compile(
+    r'(<a:xfrm[^>]*>\s*<a:off\s+x=")(\d+)("\s+y=")(\d+)("\s*/>\s*<a:ext\s+cx=")'
+    r'(\d+)("\s+cy=")(\d+)("\s*/>\s*</a:xfrm>)'
+)
+
+
+def _read_xfrm(block: str) -> tuple[int, int, int, int] | None:
+    """Extract (x, y, cx, cy) from the first <a:xfrm> in a shape block."""
+    m = _XFRM_RE.search(block)
+    if not m:
+        return None
+    return (int(m.group(2)), int(m.group(4)), int(m.group(6)), int(m.group(8)))
+
+
+def _write_xfrm(block: str, x: int, y: int, cx: int, cy: int) -> str:
+    """Replace the <a:xfrm> off/ext values in a shape block."""
+    return _XFRM_RE.sub(
+        lambda m: (
+            f'{m.group(1)}{x}{m.group(3)}{y}{m.group(5)}'
+            f'{cx}{m.group(7)}{cy}{m.group(9)}'
+        ),
+        block,
+        count=1,
+    )
+
+
 def _replace_toc_items(slide_xml: str, items: list[str]) -> str:
     """Populate the template's TOC item shapes with real section titles.
 
-    Templates typically stamp out N "項目タイトル" prompt shapes for
-    the TOC. We walk the slide in document order and replace those
-    shapes' text with items[0], items[1], ... in turn. Extra prompt
-    shapes (more template slots than items) are stripped; extra items
-    (more items than slots) are dropped silently.
+    Behaviour:
+      * Detect every <p:sp> that contains the "項目タイトル" prompt —
+        those are the canonical TOC slots. (English-subtitle helper
+        shapes containing "Section title" are stripped by
+        _strip_prompt_decoration as ordinary body filler.)
+      * Compute (item_h, gap) via fit_stack so N items fit inside the
+        Y range the template reserved for the TOC. When N is smaller
+        than the slot count we re-distribute over the same range; when
+        N is bigger we clone the first slot's XML, retag positions
+        with the compressed pitch, and append the new shapes at the
+        first slot's location in document order.
+      * Existing slots are repositioned + retexted in place; trailing
+        excess slots (when N < template_count) are dropped.
+
+    Falls back to the in-place text-only replacement when the template
+    doesn't have measurable slot rects (no <a:xfrm> on the prompt
+    shapes), so older / atypical templates still get something.
     """
+    if not items:
+        return slide_xml
+
+    # Step 1: find every shape block that's a TOC slot, with its rect.
+    matches = list(_SP_BLOCK_RE.finditer(slide_xml))
+    slot_indices: list[int] = []  # indexes into `matches`
+    slot_rects: list[tuple[int, int, int, int]] = []
+    for i, m in enumerate(matches):
+        block = m.group(0)
+        text = _sp_text(block)
+        if "項目タイトル" not in text:
+            continue
+        rect = _read_xfrm(block)
+        slot_indices.append(i)
+        slot_rects.append(rect if rect is not None else (0, 0, 0, 0))
+
+    if not slot_indices:
+        return slide_xml
+
+    # If we couldn't read rects on any slot, fall back to text-only
+    # replacement (preserves prior behaviour for templates we can't
+    # measure).
+    measurable = [r for r in slot_rects if r != (0, 0, 0, 0)]
+    if not measurable:
+        return _replace_toc_items_textonly(slide_xml, items)
+
+    # Step 2: derive the TOC's Y range from the first/last measurable
+    # slot. We assume the slots are stacked vertically (the common
+    # corporate layout). Container height is from top of the first slot
+    # to the bottom of the last.
+    first_x, first_y, first_w, first_h = measurable[0]
+    _last_x, last_y, _last_w, last_h = measurable[-1]
+    container_h = max(first_h, (last_y + last_h) - first_y)
+
+    natural_gap = 0
+    if len(measurable) >= 2:
+        # Distance between consecutive slot tops minus slot height = gap.
+        natural_gap = max(0, measurable[1][1] - measurable[0][1] - measurable[0][3])
+
+    item_h, gap = fit_stack(
+        container_h=container_h,
+        n=len(items),
+        natural_h=first_h,
+        min_h=max(int(first_h * 0.45), 200_000),
+        gap=natural_gap,
+        min_gap=0,
+    )
+
+    # Step 3: build the new shape blocks. Existing slots get their
+    # xfrm + text overwritten; if items exceed slot count we clone
+    # the first slot's XML for the extras.
+    template_block = matches[slot_indices[0]].group(0)
+
+    new_blocks: dict[int, str] = {}  # match-index -> replacement XML
+    appended_clones: list[str] = []
+
+    for i, text in enumerate(items):
+        new_y = first_y + (item_h + gap) * i
+        if i < len(slot_indices):
+            orig_block = matches[slot_indices[i]].group(0)
+            base_block = orig_block if _XFRM_RE.search(orig_block) else template_block
+            block_with_text = _replace_first_a_t(base_block, text)
+            new_blocks[slot_indices[i]] = _write_xfrm(
+                block_with_text, first_x, new_y, first_w, item_h
+            )
+        else:
+            cloned = _replace_first_a_t(template_block, text)
+            cloned = _write_xfrm(cloned, first_x, new_y, first_w, item_h)
+            appended_clones.append(cloned)
+
+    # Step 4: stitch the slide back together. Walk the original blocks
+    # in order; replace existing TOC slots with their new versions;
+    # drop trailing TOC slots that have no item to bind; insert any
+    # cloned extras right after the position of the last touched slot.
+    used_slot_indices = set(slot_indices[: len(items)])
+    drop_slot_indices = set(slot_indices[len(items):])
+    last_used_idx = max(used_slot_indices) if used_slot_indices else slot_indices[0]
+
+    pieces: list[str] = []
+    cursor = 0
+    for i, m in enumerate(matches):
+        pieces.append(slide_xml[cursor:m.start()])
+        if i in drop_slot_indices:
+            pass  # skip
+        elif i in new_blocks:
+            pieces.append(new_blocks[i])
+        else:
+            pieces.append(m.group(0))
+        if i == last_used_idx and appended_clones:
+            pieces.append("\n".join(appended_clones))
+        cursor = m.end()
+    pieces.append(slide_xml[cursor:])
+
+    return "".join(pieces)
+
+
+def _replace_toc_items_textonly(slide_xml: str, items: list[str]) -> str:
+    """Older fallback: just rewrite the text in each "項目タイトル" shape
+    in document order, no geometry adjustment. Used when the template
+    doesn't expose <a:xfrm> on the slot shapes."""
     i = 0
 
     def _rep(match: re.Match) -> str:
         nonlocal i
         block = match.group(0)
         text = _sp_text(block)
-        if "項目タイトル" not in text and "Section title" not in text:
+        if "項目タイトル" not in text:
             return block
         if i >= len(items):
-            return ""  # extra template slot; drop
+            return ""
         new = _replace_first_a_t(block, items[i])
         i += 1
         return new

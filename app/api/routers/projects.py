@@ -359,12 +359,13 @@ def revise(
 
     # Validate slide_index against the current blueprint before spending
     # an LLM call; caller passed an out-of-range index, fail fast.
-    if body.slide_index is not None:
-        if body.slide_index < 1 or body.slide_index > len(current.slides):
-            raise HTTPException(
-                400,
-                f"slide_index {body.slide_index} out of range (1..{len(current.slides)})",
-            )
+    if body.slide_index is not None and (
+        body.slide_index < 1 or body.slide_index > len(current.slides)
+    ):
+        raise HTTPException(
+            400,
+            f"slide_index {body.slide_index} out of range (1..{len(current.slides)})",
+        )
 
     llm = LLMClient()
     try:
@@ -444,13 +445,16 @@ def render(
     }
     RenderQueue().submit(job)
 
-    # Flip the project out of "draft" so the UI can distinguish projects
-    # whose render has at least been requested from ones that have
-    # literally never been touched. (Proper "complete" transition
-    # requires the render Lambda to write back; tracked separately.)
-    if project.status == "draft":
-        project.status = "rendering"
-        db.commit()
+    # Flip status to "rendering" on every render call — including
+    # re-renders kicked from Step 3. Otherwise a project that was
+    # already "complete" keeps reporting "complete" while the new job
+    # sits in the SQS queue, pollRenderComplete returns instantly, and
+    # the UI loads preview URLs for a blueprint version whose images
+    # haven't been written yet (every thumbnail 404s).
+    # The render Lambda writes back "complete" / "partial" / "failed"
+    # via db_status when it finishes.
+    project.status = "rendering"
+    db.commit()
 
     log.info("render job submitted project=%s blueprint=%s", project.id, bp.id)
 

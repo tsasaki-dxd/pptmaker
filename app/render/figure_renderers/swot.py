@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..shapes import pill_label, rect_outline, rect_shape, text_box
+from ..shapes import fit_stack, pill_label, rect_outline, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
@@ -93,20 +93,28 @@ class SwotRenderer(FigureRenderer):
                 continue
             list_y = y + 140000 + pill_h + 120000
             list_h = cell_h - (list_y - y) - 120000
-            item_h = list_h // max(1, len(items))
+            item_h, item_gap = fit_stack(
+                container_h=list_h,
+                n=len(items),
+                natural_h=300000,
+                min_h=130000,
+                gap=0,
+                min_gap=0,
+            )
             for j, item in enumerate(items):
                 shapes.append(
                     text_box(
                         sid,
                         f"swot-item-{key}-{j}",
                         x + 180000,
-                        list_y + item_h * j,
+                        list_y + (item_h + item_gap) * j,
                         cell_w - 320000,
                         item_h,
                         f"・ {item}",
                         size_pt=10,
                         color=p.black,
                         font=ctx.font,
+                        auto_fit=True,
                     )
                 )
                 sid += 1

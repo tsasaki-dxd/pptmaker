@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..shapes import rect_shape, text_box
+from ..shapes import fit_stack, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
@@ -68,20 +68,32 @@ class ComparisonRenderer(FigureRenderer):
             sid += 1
 
             items: list[str] = col["items"]
-            item_h = (container.h - 700000) // max(1, len(items))
+            # Reserve 640k for title + top padding, 60k for bottom margin.
+            # fit_stack collapses gap then shrinks per-item height to fit.
+            item_h, item_gap = fit_stack(
+                container_h=container.h,
+                n=len(items),
+                natural_h=380000,
+                min_h=160000,
+                gap=20000,
+                min_gap=0,
+                header_h=640000,
+                footer_h=60000,
+            )
             for j, item in enumerate(items):
                 shapes.append(
                     text_box(
                         sid,
                         f"cmp-item-{key}-{j}",
                         x + 260000,
-                        container.y + 640000 + item_h * j,
+                        container.y + 640000 + (item_h + item_gap) * j,
                         col_w - 440000,
-                        item_h - 20000,
+                        item_h,
                         f"・ {item}",
                         size_pt=10,
                         color=p.black,
                         font=ctx.font,
+                        auto_fit=True,
                     )
                 )
                 sid += 1

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..shapes import rect_outline, rect_shape, text_box
+from ..shapes import fit_stack, rect_outline, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
@@ -80,10 +80,23 @@ class OrgChartRenderer(FigureRenderer):
         shapes: list[str] = []
         sid = ctx.next_shape_id
 
-        row_gap = 60000
-        row_h = (container.h - row_gap * 2) // 3
-        box_h = min(row_h - 80000, 520000)
+        # Determine how many levels actually have nodes — empty trailing
+        # levels were occupying vertical space the populated rows could
+        # use (a 1-level chart wasted 2/3 of container.h on blank rows).
+        active_depths = [d for d in (1, 2, 3) if levels.get(d)]
+        n_rows = len(active_depths) or 1
+        row_gap = 60000 if n_rows > 1 else 0
+        row_h, _ = fit_stack(
+            container_h=container.h,
+            n=n_rows,
+            natural_h=520000,
+            min_h=200000,
+            gap=row_gap,
+            min_gap=0,
+        )
+        box_h = max(160000, row_h - 80000)
         positions: dict[str, tuple[int, int, int, int]] = {}
+        depth_to_row_index = {d: i for i, d in enumerate(active_depths)}
 
         for depth in (1, 2, 3):
             row = levels[depth]
@@ -92,7 +105,10 @@ class OrgChartRenderer(FigureRenderer):
             count = len(row)
             gap = container.w // 40
             box_w = (container.w - gap * (count - 1)) // count
-            row_y = container.y + (row_h + row_gap) * (depth - 1)
+            # Use the compacted depth_to_row_index so empty levels don't
+            # leave gaps in the vertical layout (1 → top, 2 → middle, 3
+            # → bottom; if level 2 is empty, level 3 moves up).
+            row_y = container.y + (row_h + row_gap) * depth_to_row_index[depth]
             box_y = row_y + (row_h - box_h) // 2
             for i, node in enumerate(row):
                 bx = container.x + (box_w + gap) * i
@@ -108,20 +124,25 @@ class OrgChartRenderer(FigureRenderer):
                     )
                 )
                 sid += 1
+                # Cap the label box height to box_h so it never extends
+                # past the rectangle behind it (was 360000 fixed, broke
+                # when fit_stack pushed box_h below 360000).
+                label_h = min(360000, max(160000, box_h - 40000))
                 shapes.append(
                     text_box(
                         sid,
                         f"org-lbl-{node['id']}",
                         bx + 80000,
-                        box_y + box_h // 2 - 180000,
+                        box_y + (box_h - label_h) // 2,
                         box_w - 160000,
-                        360000,
+                        label_h,
                         node["label"],
                         size_pt=11,
                         bold=True,
                         color=p.purple_dk,
                         align="ctr",
                         font=ctx.font,
+                        auto_fit=True,
                     )
                 )
                 sid += 1
