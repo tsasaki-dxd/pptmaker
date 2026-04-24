@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { api, type Project } from '@/lib/api';
+import { LoadingOverlay } from '@/components/LoadingOverlay';
 
 export default function ProjectsListPage() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -141,6 +142,8 @@ export default function ProjectsListPage() {
           onClose={() => setPreviewModal(null)}
         />
       )}
+
+      <LoadingOverlay when={busy} label="処理中..." />
     </section>
   );
 }

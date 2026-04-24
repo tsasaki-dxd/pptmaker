@@ -11,6 +11,7 @@ import {
   type TemplateLayoutEntry,
   type TemplateProfile,
 } from '@/lib/api';
+import { LoadingOverlay } from '@/components/LoadingOverlay';
 
 type Step = 'input' | 'reviewing' | 'rendering' | 'done';
 
@@ -351,6 +352,8 @@ export default function ProjectsPage() {
       {log.length > 0 && (
         <pre className="whitespace-pre-wrap rounded bg-off p-3 text-xs">{log.join('\n')}</pre>
       )}
+
+      <LoadingOverlay when={busy} label={log[log.length - 1]} />
     </section>
   );
 }
