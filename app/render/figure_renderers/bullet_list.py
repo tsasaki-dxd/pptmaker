@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..shapes import text_box
+from ..shapes import fit_stack, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
@@ -31,8 +31,14 @@ class BulletListRenderer(FigureRenderer):
     ) -> RenderOutput:
         p = ctx.palette
         items = content["items"]
-        gap = 100000
-        item_h = (container.h - gap * (len(items) - 1)) // len(items)
+        item_h, gap = fit_stack(
+            container_h=container.h,
+            n=len(items),
+            natural_h=520000,
+            min_h=180000,
+            gap=100000,
+            min_gap=20000,
+        )
 
         shapes: list[str] = []
         sid = ctx.next_shape_id
@@ -40,6 +46,10 @@ class BulletListRenderer(FigureRenderer):
         for i, item in enumerate(items):
             text = item if isinstance(item, str) else item.get("text", "")
             y = container.y + (item_h + gap) * i
+            has_sub = isinstance(item, dict) and item.get("sub")
+            # When a sub-text is present, split the cell vertically;
+            # otherwise the bullet text uses the whole cell.
+            primary_h = item_h // 2 if has_sub else item_h
             shapes.append(
                 text_box(
                     sid,
@@ -47,27 +57,29 @@ class BulletListRenderer(FigureRenderer):
                     container.x + 120000,
                     y,
                     container.w - 240000,
-                    item_h,
+                    primary_h,
                     f"・ {text}",
                     size_pt=11,
                     color=p.black,
                     font=ctx.font,
+                    auto_fit=True,
                 )
             )
             sid += 1
-            if isinstance(item, dict) and item.get("sub"):
+            if has_sub:
                 shapes.append(
                     text_box(
                         sid,
                         f"bl-sub-{i}",
                         container.x + 320000,
-                        y + 280000,
+                        y + primary_h,
                         container.w - 440000,
-                        item_h - 280000,
+                        item_h - primary_h,
                         item["sub"],
                         size_pt=9,
                         color=p.muted,
                         font=ctx.font,
+                        auto_fit=True,
                     )
                 )
                 sid += 1

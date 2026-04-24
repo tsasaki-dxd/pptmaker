@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..shapes import rect_shape, text_box
+from ..shapes import fit_stack, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
@@ -46,7 +46,18 @@ class TableRenderer(FigureRenderer):
 
         col_w = container.w // ncols
         header_h = 400000
-        row_h = 380000
+        # row_h shrinks with row count: 5 rows → 380k each (natural),
+        # 15 rows → squeezed proportionally so the table doesn't run
+        # off the bottom of the slot. Floored at 160k EMU.
+        row_h, _ = fit_stack(
+            container_h=container.h,
+            n=len(rows),
+            natural_h=380000,
+            min_h=160000,
+            gap=0,
+            min_gap=0,
+            header_h=header_h,
+        )
 
         shapes: list[str] = []
         sid = ctx.next_shape_id
@@ -88,12 +99,13 @@ class TableRenderer(FigureRenderer):
                         container.x + col_w * c + 80000,
                         y + 70000,
                         col_w - 160000,
-                        row_h - 140000,
+                        max(80000, row_h - 140000),
                         str(cell),
                         size_pt=10,
                         bold=(c == 0),
                         color=p.black,
                         font=ctx.font,
+                        auto_fit=True,
                     )
                 )
                 sid += 1
