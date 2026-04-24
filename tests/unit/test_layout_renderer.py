@@ -222,6 +222,42 @@ def test_multi_run_title_fully_replaced() -> None:
     assert "ここに入れる" not in out
 
 
+# Real-world corner case: content-slide title shape bundles a small
+# "eyebrow" label plus the big title into a single <p:sp> with
+# different sz per run. We must target the biggest-sz run for the
+# replacement or the blueprint title ends up in the eyebrow slot at
+# 8pt and the actual title slot becomes blank.
+EYEBROW_PLUS_TITLE_SHAPE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<p:cSld><p:spTree>
+<p:sp><p:nvSpPr><p:cNvPr id="1" name="TitleBundle"/><p:cNvSpPr/>
+<p:nvPr/></p:nvSpPr>
+<p:spPr/><p:txBody><a:bodyPr wrap="square" anchor="ctr"/><a:p>
+<a:r><a:rPr lang="ja-JP" sz="800"/><a:t>CONTENT</a:t></a:r>
+<a:r><a:rPr lang="ja-JP" sz="900"/><a:t>CONTENT</a:t></a:r>
+<a:r><a:rPr lang="ja-JP" sz="2200"/><a:t>コンテンツタイトル</a:t></a:r>
+</a:p></p:txBody></p:sp>
+</p:spTree></p:cSld></p:sld>"""
+
+
+def test_title_replace_targets_largest_sz_run_not_first() -> None:
+    req = RenderRequest(
+        slide_index=1,
+        layout="content",
+        figure_type=None,
+        content={"title": "現状と理想のギャップ"},
+    )
+    out = render_content_slide(EYEBROW_PLUS_TITLE_SHAPE, req)
+    # The real title slot (sz=2200) should now carry the blueprint title.
+    assert '<a:rPr lang="ja-JP" sz="2200"/><a:t>現状と理想のギャップ</a:t>' in out
+    # The small eyebrow labels (sz=800, sz=900) must be untouched.
+    assert '<a:rPr lang="ja-JP" sz="800"/><a:t>CONTENT</a:t>' in out
+    assert '<a:rPr lang="ja-JP" sz="900"/><a:t>CONTENT</a:t>' in out
+    # The original prompt string is gone.
+    assert "コンテンツタイトル" not in out
+
+
 TOC_SLIDE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
        xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">

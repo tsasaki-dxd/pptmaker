@@ -580,6 +580,67 @@ def _replace_first_a_t(block: str, new_text: str) -> str:
     return _AT_RUN_RE.sub(_rep, block)
 
 
+_A_RUN_RE = re.compile(r"<a:r\b.*?</a:r>", re.DOTALL)
+_RPR_SZ_RE = re.compile(r'sz="(\d+)"')
+
+
+def _replace_title_runs_in_block(block: str, new_text: str) -> str:
+    """Replace the *title* run(s) in a shape with the given text,
+    leaving smaller styled runs (labels, eyebrows) alone.
+
+    Problem this solves: the DXDesignSystem content-slide title shape
+    packs three runs into one <p:sp> — a pt8 "CONTENT" eyebrow, a pt9
+    "CONTENT" label, and the pt22 "コンテンツタイトル" actual title.
+    _replace_first_a_t would drop the blueprint title into the pt8
+    eyebrow slot and blank out the pt22 slot entirely, leaving the
+    slide with no visible title at all. This helper picks the run(s)
+    with the largest `sz="..."` attribute — those are the title's own
+    runs by construction — and rewrites only them. A multi-run title
+    (cover "タイトルを" + "ここに入れる。") still collapses cleanly
+    because both runs carry the same largest sz.
+
+    Runs without an explicit sz attribute default to 0 in the
+    comparison, which means a title whose sz is inherited from the
+    list style would match as "smallest" and not get replaced —
+    acceptable because in practice templates that set sz on the
+    eyebrow always also set it on the title run.
+    """
+    runs = list(_A_RUN_RE.finditer(block))
+    if not runs:
+        # No runs at all: fall back to the first <a:t> replacement.
+        return _replace_first_a_t(block, new_text)
+
+    max_sz = 0
+    for rm in runs:
+        sz_m = _RPR_SZ_RE.search(rm.group(0))
+        if sz_m:
+            sz = int(sz_m.group(1))
+            if sz > max_sz:
+                max_sz = sz
+
+    replaced = False
+
+    def _rep(m: re.Match) -> str:
+        nonlocal replaced
+        run = m.group(0)
+        sz_m = _RPR_SZ_RE.search(run)
+        sz = int(sz_m.group(1)) if sz_m else 0
+        if sz != max_sz:
+            return run  # smaller styled run — leave it alone
+        text_m = re.search(r"<a:t>[^<]*</a:t>", run)
+        if not text_m:
+            return run
+        if not replaced:
+            replaced = True
+            return run.replace(text_m.group(0), f"<a:t>{_escape(new_text)}</a:t>")
+        return run.replace(text_m.group(0), "<a:t></a:t>")
+
+    out = _A_RUN_RE.sub(_rep, block)
+    # If nothing matched (shape with no sz at all), fall back to the
+    # first-a:t replacement so we still produce a title.
+    return out if replaced else _replace_first_a_t(block, new_text)
+
+
 _TITLE_PH_RE = re.compile(
     r'<p:ph\b[^/>]*(?:type="(?:title|ctrTitle)"|idx="0")[^/>]*/?>',
 )
@@ -645,7 +706,7 @@ def _replace_title(slide_xml: str, title: str) -> str:
             return block
         if _TITLE_PH_RE.search(block):
             replaced = True
-            return _ensure_autofit_on_block(_replace_first_a_t(block, title))
+            return _ensure_autofit_on_block(_replace_title_runs_in_block(block, title))
         return block
 
     out = _SP_BLOCK_RE.sub(_pass1, slide_xml)
@@ -660,7 +721,7 @@ def _replace_title(slide_xml: str, title: str) -> str:
         text = _sp_text(block)
         if any(p in text for p in _TITLE_PROMPT_PATTERNS):
             replaced = True
-            return _ensure_autofit_on_block(_replace_first_a_t(block, title))
+            return _ensure_autofit_on_block(_replace_title_runs_in_block(block, title))
         return block
 
     return _SP_BLOCK_RE.sub(_pass2, out)
