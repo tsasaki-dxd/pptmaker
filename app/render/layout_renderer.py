@@ -27,9 +27,17 @@ from .theme_loader import ThemeParseError, load_theme
 
 DEFAULT_BODY_AREA = EMUBox(x=inch(0.5), y=inch(1.6), w=inch(12.3), h=inch(5.4))
 _BODY_AREA_4_3 = EMUBox(x=inch(0.4), y=inch(1.3), w=inch(9.2), h=inch(5.9))
+# 16:9 widescreen at 10x5.625 inch — the layout PowerPoint calls
+# "ワイドスクリーン (10 x 5.63 in)". cx coincides with classic 4:3
+# (9144000 EMU) so checking width alone misclassifies it; the cy
+# distinguishes them.
+_BODY_AREA_WIDE_10IN = EMUBox(x=inch(0.4), y=inch(1.75), w=inch(9.2), h=inch(3.4))
 _SLIDE_CX_16_9 = 12192000
 _SLIDE_CY_16_9 = 6858000
 _SLIDE_CX_4_3 = 9144000
+_SLIDE_CY_4_3 = 6858000
+_SLIDE_CX_WIDE_10IN = 9144000
+_SLIDE_CY_WIDE_10IN = 5143500
 
 _logger = logging.getLogger(__name__)
 
@@ -37,9 +45,12 @@ _logger = logging.getLogger(__name__)
 def default_body_area_for(slide_size: tuple[int, int] | None) -> EMUBox:
     """Return a reasonable body area for the given slide size.
 
-    16:9 uses the legacy DEFAULT_BODY_AREA. 4:3 uses proportionally
-    adjusted margins that fit the narrower canvas. Other ratios scale
-    from the 16:9 baseline relative to the slide cx/cy.
+    16:9 standard (13.333×7.5) uses DEFAULT_BODY_AREA.
+    16:9 wide (10x5.625, "ワイドスクリーン") uses a smaller body box
+    that actually fits — checking cx alone matches both widescreen
+    and 4:3 (9144000 EMU each), so cy must also match.
+    4:3 (10x7.5) uses the legacy _BODY_AREA_4_3.
+    Other ratios scale from the 16:9 baseline relative to slide cx/cy.
     """
     if slide_size is None:
         return DEFAULT_BODY_AREA
@@ -48,7 +59,9 @@ def default_body_area_for(slide_size: tuple[int, int] | None) -> EMUBox:
         return DEFAULT_BODY_AREA
     if abs(cx - _SLIDE_CX_16_9) <= 1000 and abs(cy - _SLIDE_CY_16_9) <= 1000:
         return DEFAULT_BODY_AREA
-    if abs(cx - _SLIDE_CX_4_3) <= 1000:
+    if abs(cx - _SLIDE_CX_WIDE_10IN) <= 1000 and abs(cy - _SLIDE_CY_WIDE_10IN) <= 1000:
+        return _BODY_AREA_WIDE_10IN
+    if abs(cx - _SLIDE_CX_4_3) <= 1000 and abs(cy - _SLIDE_CY_4_3) <= 1000:
         return _BODY_AREA_4_3
     sx = cx / _SLIDE_CX_16_9
     sy = cy / _SLIDE_CY_16_9
@@ -374,6 +387,7 @@ def render_content_slide(
     slots: list[dict] | None = None,
     theme_pptx_bytes: bytes | None = None,
     slide_size: tuple[int, int] | None = None,
+    total_slides: int | None = None,
 ) -> str:
     """Return updated slide XML with:
       1. Title placeholder text replaced.
@@ -389,18 +403,47 @@ def render_content_slide(
     """
     out = slide_xml
 
-    if slide_size is not None and req.body_area == DEFAULT_BODY_AREA:
-        req = RenderRequest(
-            slide_index=req.slide_index,
-            layout=req.layout,
-            figure_type=req.figure_type,
-            content=req.content,
-            body_area=default_body_area_for(slide_size),
-        )
+    # Body-area resolution priority:
+    #   1. explicit req.body_area (caller decided)
+    #   2. detected from a body-prompt decoration shape on this slide
+    #      (works for templates without <p:ph>, the common JP case)
+    #   3. derived from slide dimensions (16:9, 10x5.625 wide, 4:3)
+    #   4. fall back to DEFAULT_BODY_AREA
+    # The detected rect wins over the slide-size guess because the
+    # template author put the prompt shape exactly where the body
+    # belongs; the slide-size fallback is at best a reasonable margin.
+    if req.body_area == DEFAULT_BODY_AREA:
+        body_rect = _detect_body_rect(out)
+        if body_rect is not None:
+            req = RenderRequest(
+                slide_index=req.slide_index,
+                layout=req.layout,
+                figure_type=req.figure_type,
+                content=req.content,
+                body_area=EMUBox(
+                    x=body_rect[0],
+                    y=body_rect[1],
+                    w=body_rect[2],
+                    h=body_rect[3],
+                ),
+            )
+        elif slide_size is not None:
+            req = RenderRequest(
+                slide_index=req.slide_index,
+                layout=req.layout,
+                figure_type=req.figure_type,
+                content=req.content,
+                body_area=default_body_area_for(slide_size),
+            )
 
     title = req.content.get("title")
     if title:
         out = _replace_title(out, title)
+
+    # Page footer: rewrite "NN / MM" → "current / total" so a 6-page
+    # template fed into a 16-slide deck doesn't keep showing "/ 06".
+    if total_slides is not None:
+        out = _replace_page_counter(out, req.slide_index, total_slides)
 
     # TOC slides: populate the template's "項目タイトル" slots with the
     # blueprint's item list before the generic prompt stripper runs
@@ -474,14 +517,26 @@ _TITLE_PROMPT_PATTERNS: tuple[str, ...] = (
 _BODY_PROMPT_PATTERNS: tuple[str, ...] = (
     "本文をここに入れる",
     "本文 / 図解 / 表をここに配置",
+    "本文／図解／図表をここに配置",
     "本文／図解／表をここに配置",
     "本文 / 図版 / 表をここに配置",
     "本文／図版／表をここに配置",
+    # Full-width slash + half-width spaces — observed on the
+    # DXDesignSystem template (template authors mix slash widths).
+    "本文 ／ 図版 ／ 表をここに配置",
+    "本文 ／ 図解 ／ 表をここに配置",
     "このセクションの概要を",
     "サブタイトル・コンセプト文",
     "項目タイトル",
     "Section title",
     "本セクションの読了目安",
+)
+# Templates sometimes ship a tiny "BODY" / "Body" label above the
+# body area as a visual guide. Match exactly — "BODY" as a substring
+# of legitimate content (e.g. an English title) shouldn't be stripped.
+_BODY_PROMPT_EXACT_PATTERNS: tuple[str, ...] = (
+    "BODY",
+    "Body",
 )
 
 _SP_BLOCK_RE = re.compile(r"<p:sp\b[^>]*>.*?</p:sp>", re.DOTALL)
@@ -589,65 +644,66 @@ def _write_xfrm(block: str, x: int, y: int, cx: int, cy: int) -> str:
     )
 
 
+_NUMBER_PREFIX_RE = re.compile(r"^\s*(\d{1,2})\s*$")
+
+
 def _replace_toc_items(slide_xml: str, items: list[str]) -> str:
-    """Populate the template's TOC item shapes with real section titles.
+    """Populate the template's TOC entries with real section titles.
 
-    Behaviour:
-      * Detect every <p:sp> that contains the "項目タイトル" prompt —
-        those are the canonical TOC slots. (English-subtitle helper
-        shapes containing "Section title" are stripped by
-        _strip_prompt_decoration as ordinary body filler.)
-      * Compute (item_h, gap) via fit_stack so N items fit inside the
-        Y range the template reserved for the TOC. When N is smaller
-        than the slot count we re-distribute over the same range; when
-        N is bigger we clone the first slot's XML, retag positions
-        with the compressed pitch, and append the new shapes at the
-        first slot's location in document order.
-      * Existing slots are repositioned + retexted in place; trailing
-        excess slots (when N < template_count) are dropped.
+    A TOC entry on the canonical corporate template is a *group* of
+    shapes — a number prefix ("01"), a Japanese title ("項目タイトル"),
+    sometimes a Section-title English subtitle, sometimes a horizontal
+    rule. We anchor on the Japanese-title shape (every entry has one),
+    then locate the number prefix by Y proximity. When the blueprint
+    has more items than the template has entries, both shapes are
+    cloned and the number is auto-incremented (06, 07, …); when fewer,
+    trailing entries (anchor + number companion) are dropped.
 
-    Falls back to the in-place text-only replacement when the template
-    doesn't have measurable slot rects (no <a:xfrm> on the prompt
-    shapes), so older / atypical templates still get something.
+    fit_stack drives the pitch computation so the whole list still fits
+    inside the template's reserved Y range no matter how many items
+    blueprint ships. English-subtitle "Section title" shapes are not
+    cloned and get stripped by _strip_prompt_decoration downstream.
+
+    Falls back to text-only rewrite when no anchor has a measurable
+    <a:xfrm>, so templates we can't measure still get something useful.
     """
     if not items:
         return slide_xml
 
-    # Step 1: find every shape block that's a TOC slot, with its rect.
     matches = list(_SP_BLOCK_RE.finditer(slide_xml))
-    slot_indices: list[int] = []  # indexes into `matches`
-    slot_rects: list[tuple[int, int, int, int]] = []
+
+    # Step 1: locate anchors ("項目タイトル" shapes) with their rects.
+    anchor_indices: list[int] = []
+    anchor_rects: list[tuple[int, int, int, int] | None] = []
     for i, m in enumerate(matches):
         block = m.group(0)
-        text = _sp_text(block)
-        if "項目タイトル" not in text:
+        if "項目タイトル" not in _sp_text(block):
             continue
-        rect = _read_xfrm(block)
-        slot_indices.append(i)
-        slot_rects.append(rect if rect is not None else (0, 0, 0, 0))
+        anchor_indices.append(i)
+        anchor_rects.append(_read_xfrm(block))
 
-    if not slot_indices:
+    if not anchor_indices:
         return slide_xml
 
-    # If we couldn't read rects on any slot, fall back to text-only
-    # replacement (preserves prior behaviour for templates we can't
-    # measure).
-    measurable = [r for r in slot_rects if r != (0, 0, 0, 0)]
-    if not measurable:
+    measurable_pairs = [
+        (idx, rect)
+        for idx, rect in zip(anchor_indices, anchor_rects, strict=True)
+        if rect is not None
+    ]
+    if not measurable_pairs:
         return _replace_toc_items_textonly(slide_xml, items)
 
-    # Step 2: derive the TOC's Y range from the first/last measurable
-    # slot. We assume the slots are stacked vertically (the common
-    # corporate layout). Container height is from top of the first slot
-    # to the bottom of the last.
-    first_x, first_y, first_w, first_h = measurable[0]
-    _last_x, last_y, _last_w, last_h = measurable[-1]
+    # Step 2: container range + natural pitch from the measurable
+    # anchors. Container height = first anchor top → last anchor bottom.
+    first_anchor_idx, (first_x, first_y, first_w, first_h) = measurable_pairs[0]
+    _, (_, last_y, _, last_h) = measurable_pairs[-1]
     container_h = max(first_h, (last_y + last_h) - first_y)
-
     natural_gap = 0
-    if len(measurable) >= 2:
-        # Distance between consecutive slot tops minus slot height = gap.
-        natural_gap = max(0, measurable[1][1] - measurable[0][1] - measurable[0][3])
+    if len(measurable_pairs) >= 2:
+        natural_gap = max(
+            0,
+            measurable_pairs[1][1][1] - measurable_pairs[0][1][1] - measurable_pairs[0][1][3],
+        )
 
     item_h, gap = fit_stack(
         container_h=container_h,
@@ -657,43 +713,123 @@ def _replace_toc_items(slide_xml: str, items: list[str]) -> str:
         gap=natural_gap,
         min_gap=0,
     )
+    pitch = item_h + gap
 
-    # Step 3: build the new shape blocks. Existing slots get their
-    # xfrm + text overwritten; if items exceed slot count we clone
-    # the first slot's XML for the extras.
-    template_block = matches[slot_indices[0]].group(0)
+    # Step 3: pair each anchor with its number-prefix companion shape.
+    # Companion = an <p:sp> whose text is just digits ("01", "02", …)
+    # and whose Y center is closest to the anchor's Y center within
+    # the natural pitch. Keep at most one companion per anchor.
+    half_window = max(pitch, first_h) // 2 + 1
+    number_companions: list[tuple[int, tuple[int, int, int, int]] | None] = []
+    used_companion_indices: set[int] = set()
+    for _a_idx, a_rect in zip(anchor_indices, anchor_rects, strict=True):
+        if a_rect is None:
+            number_companions.append(None)
+            continue
+        a_center = a_rect[1] + a_rect[3] // 2
+        best: tuple[int, tuple[int, int, int, int]] | None = None
+        best_dist = half_window
+        for j, m in enumerate(matches):
+            if j in anchor_indices or j in used_companion_indices:
+                continue
+            block = m.group(0)
+            text = _sp_text(block).strip()
+            if not _NUMBER_PREFIX_RE.match(text):
+                continue
+            r = _read_xfrm(block)
+            if r is None:
+                continue
+            n_center = r[1] + r[3] // 2
+            dist = abs(n_center - a_center)
+            if dist < best_dist:
+                best = (j, r)
+                best_dist = dist
+        if best is not None:
+            used_companion_indices.add(best[0])
+        number_companions.append(best)
 
-    new_blocks: dict[int, str] = {}  # match-index -> replacement XML
+    # Reference offsets for cloning the extras: take the first anchor
+    # whose companion we found; clone its number's relative dx/dy/w/h.
+    template_anchor_block = matches[first_anchor_idx].group(0)
+    template_number_block: str | None = None
+    template_number_offset: tuple[int, int, int, int] | None = None  # dx, dy, w, h
+    for a_rect, comp in zip(anchor_rects, number_companions, strict=True):
+        if a_rect is None or comp is None:
+            continue
+        n_idx, n_rect = comp
+        template_number_block = matches[n_idx].group(0)
+        template_number_offset = (
+            n_rect[0] - a_rect[0],
+            n_rect[1] - a_rect[1],
+            n_rect[2],
+            n_rect[3],
+        )
+        break
+
+    # Step 4: build the per-shape replacements.
+    new_blocks: dict[int, str] = {}
     appended_clones: list[str] = []
+    drop_indices: set[int] = set()
 
     for i, text in enumerate(items):
-        new_y = first_y + (item_h + gap) * i
-        if i < len(slot_indices):
-            orig_block = matches[slot_indices[i]].group(0)
-            base_block = orig_block if _XFRM_RE.search(orig_block) else template_block
-            block_with_text = _replace_first_a_t(base_block, text)
-            new_blocks[slot_indices[i]] = _write_xfrm(
-                block_with_text, first_x, new_y, first_w, item_h
-            )
+        new_anchor_y = first_y + pitch * i
+        if i < len(anchor_indices):
+            a_idx = anchor_indices[i]
+            orig = matches[a_idx].group(0)
+            base = orig if _XFRM_RE.search(orig) else template_anchor_block
+            new_anchor = _replace_first_a_t(base, text)
+            new_anchor = _write_xfrm(new_anchor, first_x, new_anchor_y, first_w, item_h)
+            new_blocks[a_idx] = new_anchor
+
+            comp = number_companions[i]
+            if comp is not None:
+                n_idx, n_rect = comp
+                # Preserve the companion's offset from its own anchor;
+                # the absolute Y must shift by the same delta the anchor moved.
+                anchor_rect = anchor_rects[i]
+                if anchor_rect is not None:
+                    dy = n_rect[1] - anchor_rect[1]
+                    dx = n_rect[0] - anchor_rect[0]
+                else:
+                    dy = template_number_offset[1] if template_number_offset else 0
+                    dx = template_number_offset[0] if template_number_offset else 0
+                new_n_y = new_anchor_y + dy
+                new_n_x = first_x + dx
+                new_n = _replace_first_a_t(matches[n_idx].group(0), f"{i + 1:02d}")
+                new_n = _write_xfrm(new_n, new_n_x, new_n_y, n_rect[2], n_rect[3])
+                new_blocks[n_idx] = new_n
         else:
-            cloned = _replace_first_a_t(template_block, text)
-            cloned = _write_xfrm(cloned, first_x, new_y, first_w, item_h)
-            appended_clones.append(cloned)
+            anchor_clone = _replace_first_a_t(template_anchor_block, text)
+            anchor_clone = _write_xfrm(
+                anchor_clone, first_x, new_anchor_y, first_w, item_h
+            )
+            appended_clones.append(anchor_clone)
+            if template_number_block is not None and template_number_offset is not None:
+                dx, dy, nw, nh = template_number_offset
+                num_clone = _replace_first_a_t(template_number_block, f"{i + 1:02d}")
+                num_clone = _write_xfrm(
+                    num_clone, first_x + dx, new_anchor_y + dy, nw, nh
+                )
+                appended_clones.append(num_clone)
 
-    # Step 4: stitch the slide back together. Walk the original blocks
-    # in order; replace existing TOC slots with their new versions;
-    # drop trailing TOC slots that have no item to bind; insert any
-    # cloned extras right after the position of the last touched slot.
-    used_slot_indices = set(slot_indices[: len(items)])
-    drop_slot_indices = set(slot_indices[len(items):])
-    last_used_idx = max(used_slot_indices) if used_slot_indices else slot_indices[0]
+    for k in range(len(items), len(anchor_indices)):
+        drop_indices.add(anchor_indices[k])
+        comp = number_companions[k]
+        if comp is not None:
+            drop_indices.add(comp[0])
 
+    # Step 5: stitch the slide XML back together.
+    last_used_idx = (
+        anchor_indices[min(len(items), len(anchor_indices)) - 1]
+        if anchor_indices
+        else 0
+    )
     pieces: list[str] = []
     cursor = 0
     for i, m in enumerate(matches):
         pieces.append(slide_xml[cursor:m.start()])
-        if i in drop_slot_indices:
-            pass  # skip
+        if i in drop_indices:
+            pass
         elif i in new_blocks:
             pieces.append(new_blocks[i])
         else:
@@ -740,9 +876,69 @@ def _strip_prompt_decoration(slide_xml: str) -> str:
         text = _sp_text(block)
         if any(p in text for p in _BODY_PROMPT_PATTERNS):
             return ""
+        if text.strip() in _BODY_PROMPT_EXACT_PATTERNS:
+            return ""
         return block
 
     return _SP_BLOCK_RE.sub(_keep, slide_xml)
+
+
+_PAGE_COUNTER_RE = re.compile(r"<a:t>\s*(\d{1,3})\s*/\s*(\d{1,3})\s*</a:t>")
+
+
+def _replace_page_counter(slide_xml: str, current: int, total: int) -> str:
+    """Rewrite ``<a:t>NN / MM</a:t>`` page-counter strings to the actual
+    ``current / total`` of the rendered deck.
+
+    Templates ship with a fixed counter like "04 / 06" baked into the
+    slide footer. After we expand the deck to N slides, every slide
+    keeps showing "/ 06" unless we rewrite it here. The regex matches
+    only `<a:t>` content shaped exactly like ``<digits> / <digits>``,
+    so legitimate body text containing slashes is never touched.
+
+    Both numbers are zero-padded to two digits to match the template's
+    formatting convention.
+    """
+    replacement = f"<a:t>{current:02d} / {total:02d}</a:t>"
+
+    def _rep(_m: re.Match) -> str:
+        return replacement
+
+    return _PAGE_COUNTER_RE.sub(_rep, slide_xml)
+
+
+def _detect_body_rect(slide_xml: str) -> tuple[int, int, int, int] | None:
+    """Find the body area by reading the rect off the largest body-prompt
+    decoration shape in the slide.
+
+    Many real-world templates don't use <p:ph type="body">. They mark
+    the body area with a styled text box that contains a prompt like
+    "本文 ／ 図版 ／ 表をここに配置". The shape's <a:xfrm> is the
+    actual body container; reading it lets the renderer position
+    figures correctly without the user having to switch to a "proper"
+    placeholder template, and without us having to guess body
+    coordinates from slide dimensions alone.
+
+    Returns (x, y, cx, cy) for the largest matching shape by area, or
+    None when no body prompt shape is present.
+    """
+    candidates: list[tuple[int, int, int, int]] = []
+    for m in _SP_BLOCK_RE.finditer(slide_xml):
+        block = m.group(0)
+        text = _sp_text(block)
+        if not any(p in text for p in _BODY_PROMPT_PATTERNS):
+            continue
+        # Skip the small "項目タイトル" / "Section title" / "BODY"
+        # auxiliary prompts — they're not the body container.
+        if "項目タイトル" in text or "Section title" in text:
+            continue
+        rect = _read_xfrm(block)
+        if rect is None:
+            continue
+        candidates.append(rect)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda r: r[2] * r[3])
 
 
 def _strip_unused_title_prompts(slide_xml: str) -> str:

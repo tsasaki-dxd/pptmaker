@@ -185,6 +185,7 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
                     slots=slots,
                     theme_pptx_bytes=theme_bytes,
                     slide_size=slide_size,
+                    total_slides=len(blueprint_slides),
                 )
             except Exception:
                 # Leave the unmodified template XML in place for this

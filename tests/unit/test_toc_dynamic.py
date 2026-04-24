@@ -98,3 +98,49 @@ def test_textonly_fallback_when_no_xfrm() -> None:
     out = _replace_toc_items(src, ["A"])
     assert "A" in out
     assert "項目タイトル" not in out
+
+
+def _entry_with_number(idx: int, y: int, num: str) -> str:
+    """A TOC entry pair: number prefix shape + Japanese title shape.
+    Number sits ~50k EMU above the anchor (mirrors the user's template
+    where "01" is offset slightly from "項目タイトル" within the same
+    visual band)."""
+    number_y = y - 50_000
+    return (
+        f'<p:sp><p:nvSpPr><p:cNvPr id="{idx * 10}" name="num{idx}"/>'
+        f'<p:cNvSpPr/><p:nvPr/></p:nvSpPr>'
+        f'<p:spPr><a:xfrm><a:off x="500000" y="{number_y}"/>'
+        f'<a:ext cx="500000" cy="200000"/></a:xfrm></p:spPr>'
+        f'<p:txBody><a:p><a:r><a:t>{num}</a:t></a:r></a:p></p:txBody></p:sp>'
+    ) + _slot(idx, y)
+
+
+def test_extras_clone_number_prefix_companion() -> None:
+    # 5-entry template (pairs of number + 項目タイトル), expand to 6.
+    parts = ["<p:sld><p:cSld><p:spTree>"]
+    for i in range(5):
+        parts.append(_entry_with_number(i + 1, 1_000_000 + 500_000 * i, f"{i + 1:02d}"))
+    parts.append("</p:spTree></p:cSld></p:sld>")
+    src = "".join(parts)
+
+    out = _replace_toc_items(src, ["A", "B", "C", "D", "E", "F"])
+    # All six titles present.
+    for letter in "ABCDEF":
+        assert f"<a:t>{letter}</a:t>" in out
+    # All six number prefixes 01..06 present (the cloned 06 must exist).
+    numbers = re.findall(r"<a:t>(0[1-9])</a:t>", out)
+    assert numbers == ["01", "02", "03", "04", "05", "06"]
+
+
+def test_fewer_items_drop_companion_numbers_too() -> None:
+    parts = ["<p:sld><p:cSld><p:spTree>"]
+    for i in range(5):
+        parts.append(_entry_with_number(i + 1, 1_000_000 + 500_000 * i, f"{i + 1:02d}"))
+    parts.append("</p:spTree></p:cSld></p:sld>")
+    src = "".join(parts)
+
+    out = _replace_toc_items(src, ["A", "B", "C"])
+    # Only 01..03 should remain — 04 and 05 numbers dropped along with their titles.
+    assert "<a:t>03</a:t>" in out
+    assert "<a:t>04</a:t>" not in out
+    assert "<a:t>05</a:t>" not in out
