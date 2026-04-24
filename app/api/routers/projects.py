@@ -445,13 +445,16 @@ def render(
     }
     RenderQueue().submit(job)
 
-    # Flip the project out of "draft" so the UI can distinguish projects
-    # whose render has at least been requested from ones that have
-    # literally never been touched. (Proper "complete" transition
-    # requires the render Lambda to write back; tracked separately.)
-    if project.status == "draft":
-        project.status = "rendering"
-        db.commit()
+    # Flip status to "rendering" on every render call — including
+    # re-renders kicked from Step 3. Otherwise a project that was
+    # already "complete" keeps reporting "complete" while the new job
+    # sits in the SQS queue, pollRenderComplete returns instantly, and
+    # the UI loads preview URLs for a blueprint version whose images
+    # haven't been written yet (every thumbnail 404s).
+    # The render Lambda writes back "complete" / "partial" / "failed"
+    # via db_status when it finishes.
+    project.status = "rendering"
+    db.commit()
 
     log.info("render job submitted project=%s blueprint=%s", project.id, bp.id)
 
