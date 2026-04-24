@@ -128,7 +128,10 @@ export default function TemplatesPage() {
         )}
       </div>
 
-      <LoadingOverlay when={uploading} label={status || 'アップロード中...'} />
+      <LoadingOverlay
+        when={uploading || list === null}
+        label={uploading ? (status || 'アップロード中...') : '読み込み中...'}
+      />
     </section>
   );
 }

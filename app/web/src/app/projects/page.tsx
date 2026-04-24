@@ -38,6 +38,9 @@ export default function ProjectsPage() {
   const [stepPreviews, setStepPreviews] = useState<
     { slide_index: number; url: string }[]
   >([]);
+  // True until the first refresh() returns — blocks interaction with
+  // the empty template dropdown on initial mount.
+  const [listLoading, setListLoading] = useState(true);
 
   const push = (msg: string) => setLog((prev) => [...prev, msg]);
 
@@ -48,6 +51,8 @@ export default function ProjectsPage() {
       if (t.length && !templateId) setTemplateId(t[0].id);
     } catch (e) {
       push(`テンプレ一覧取得失敗: ${String(e)}`);
+    } finally {
+      setListLoading(false);
     }
   }, [templateId]);
 
@@ -353,7 +358,10 @@ export default function ProjectsPage() {
         <pre className="whitespace-pre-wrap rounded bg-off p-3 text-xs">{log.join('\n')}</pre>
       )}
 
-      <LoadingOverlay when={busy} label={log[log.length - 1]} />
+      <LoadingOverlay
+        when={busy || listLoading}
+        label={listLoading ? '読み込み中...' : log[log.length - 1]}
+      />
     </section>
   );
 }
