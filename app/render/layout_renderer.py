@@ -401,6 +401,16 @@ def render_content_slide(
     if title:
         out = _replace_title(out, title)
 
+    # TOC slides: populate the template's "項目タイトル" slots with the
+    # blueprint's item list before the generic prompt stripper runs
+    # (the stripper would otherwise blank them out entirely).
+    if req.layout == "toc":
+        items = req.content.get("items")
+        if isinstance(items, list):
+            toc_items = [str(x) for x in items if isinstance(x, (str, int, float))]
+            if toc_items:
+                out = _replace_toc_items(out, toc_items)
+
     # Strip decoration text boxes containing template prompt filler
     # (e.g. "本文 / 図解 / 表をここに配置", "このセクションの概要を…").
     # These shapes have no <p:ph> so _strip_body_placeholders misses
@@ -502,40 +512,80 @@ def _replace_first_a_t(block: str, new_text: str) -> str:
     return _AT_RUN_RE.sub(_rep, block)
 
 
+_TITLE_PH_RE = re.compile(
+    r'<p:ph\b[^/>]*(?:type="(?:title|ctrTitle)"|idx="0")[^/>]*/?>',
+)
+
+
 def _replace_title(slide_xml: str, title: str) -> str:
     """Replace the title text on a slide.
 
-    Priority: proper <p:ph type="title"|"ctrTitle"|idx="0"> first,
-    then fall back to a decoration text box whose text matches one
-    of the title prompt patterns (handles templates that don't use
-    proper placeholders).
-    """
-    pattern = re.compile(
-        r'(<p:sp\b[^>]*>.*?<p:ph\b[^/>]*'
-        r'(?:type="(?:title|ctrTitle)"|idx="0")'
-        r'[^/>]*/?>.*?)<a:t>[^<]*</a:t>',
-        re.DOTALL,
-    )
-    replacement = r"\1<a:t>" + _escape(title) + r"</a:t>"
-    new, n = pattern.subn(replacement, slide_xml, count=1)
-    if n > 0:
-        return new
-    # Fallback: find a <p:sp> whose visible text matches a known title
-    # prompt (no <p:ph> marker) and overwrite its runs.
-    done = False
+    Pass 1: find the first <p:sp> that contains a proper title
+    placeholder (<p:ph type="title"|"ctrTitle"|idx="0">). Overwrite
+    its first <a:t> run with the new title and blank every subsequent
+    run inside the same shape — corporate templates frequently split
+    the title across multiple styled runs (e.g. "タイトルを" + "ここに
+    入れる。"); overwriting only the first run leaves the tail visible.
 
-    def _maybe_replace(match: re.Match) -> str:
-        nonlocal done
-        if done:
-            return match.group(0)
+    Pass 2 (fallback): templates that don't use proper placeholders
+    embed the prompt as decoration text. Find the first <p:sp> whose
+    visible text matches _TITLE_PROMPT_PATTERNS and rewrite it the
+    same way.
+    """
+    replaced = False
+
+    def _pass1(match: re.Match) -> str:
+        nonlocal replaced
+        block = match.group(0)
+        if replaced:
+            return block
+        if _TITLE_PH_RE.search(block):
+            replaced = True
+            return _replace_first_a_t(block, title)
+        return block
+
+    out = _SP_BLOCK_RE.sub(_pass1, slide_xml)
+    if replaced:
+        return out
+
+    def _pass2(match: re.Match) -> str:
+        nonlocal replaced
+        block = match.group(0)
+        if replaced:
+            return block
+        text = _sp_text(block)
+        if any(p in text for p in _TITLE_PROMPT_PATTERNS):
+            replaced = True
+            return _replace_first_a_t(block, title)
+        return block
+
+    return _SP_BLOCK_RE.sub(_pass2, out)
+
+
+def _replace_toc_items(slide_xml: str, items: list[str]) -> str:
+    """Populate the template's TOC item shapes with real section titles.
+
+    Templates typically stamp out N "項目タイトル" prompt shapes for
+    the TOC. We walk the slide in document order and replace those
+    shapes' text with items[0], items[1], ... in turn. Extra prompt
+    shapes (more template slots than items) are stripped; extra items
+    (more items than slots) are dropped silently.
+    """
+    i = 0
+
+    def _rep(match: re.Match) -> str:
+        nonlocal i
         block = match.group(0)
         text = _sp_text(block)
-        if not any(p in text for p in _TITLE_PROMPT_PATTERNS):
+        if "項目タイトル" not in text and "Section title" not in text:
             return block
-        done = True
-        return _replace_first_a_t(block, title)
+        if i >= len(items):
+            return ""  # extra template slot; drop
+        new = _replace_first_a_t(block, items[i])
+        i += 1
+        return new
 
-    return _SP_BLOCK_RE.sub(_maybe_replace, slide_xml)
+    return _SP_BLOCK_RE.sub(_rep, slide_xml)
 
 
 def _strip_prompt_decoration(slide_xml: str) -> str:

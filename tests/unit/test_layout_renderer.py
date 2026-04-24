@@ -192,3 +192,71 @@ def test_decoration_prompt_stripped_even_without_title() -> None:
     assert "コンテンツタイトル" not in out
     assert "本文 / 図解 / 表をここに配置" not in out
     assert "DXデザインシステム株式会社" in out
+
+
+# Cover titles frequently span multiple styled <a:t> runs. Overwriting
+# only the first run used to leave the tail visible (e.g. "タイトルを"
+# got replaced but "ここに入れる。" stayed).
+MULTI_RUN_TITLE_SLIDE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<p:cSld><p:spTree>
+<p:sp><p:nvSpPr><p:cNvPr id="1" name="Title"/><p:cNvSpPr/>
+<p:nvPr><p:ph type="ctrTitle" idx="0"/></p:nvPr></p:nvSpPr>
+<p:spPr/><p:txBody><a:bodyPr/><a:p>
+<a:r><a:t>タイトルを</a:t></a:r><a:r><a:t>ここに入れる。</a:t></a:r>
+</a:p></p:txBody></p:sp>
+</p:spTree></p:cSld></p:sld>"""
+
+
+def test_multi_run_title_fully_replaced() -> None:
+    req = RenderRequest(
+        slide_index=1,
+        layout="cover",
+        figure_type=None,
+        content={"title": "DXコンサルティング提案書"},
+    )
+    out = render_content_slide(MULTI_RUN_TITLE_SLIDE, req)
+    assert "DXコンサルティング提案書" in out
+    assert "タイトルを" not in out
+    assert "ここに入れる" not in out
+
+
+TOC_SLIDE = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<p:cSld><p:spTree>
+<p:sp><p:nvSpPr><p:cNvPr id="1" name="i1"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+<p:spPr/><p:txBody><a:p><a:r><a:t>項目タイトル</a:t></a:r></a:p></p:txBody></p:sp>
+<p:sp><p:nvSpPr><p:cNvPr id="2" name="i2"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+<p:spPr/><p:txBody><a:p><a:r><a:t>項目タイトル</a:t></a:r></a:p></p:txBody></p:sp>
+<p:sp><p:nvSpPr><p:cNvPr id="3" name="i3"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+<p:spPr/><p:txBody><a:p><a:r><a:t>項目タイトル</a:t></a:r></a:p></p:txBody></p:sp>
+</p:spTree></p:cSld></p:sld>"""
+
+
+def test_toc_items_populate_item_title_slots() -> None:
+    req = RenderRequest(
+        slide_index=2,
+        layout="toc",
+        figure_type=None,
+        content={"items": ["課題認識", "提案概要", "推進体制"]},
+    )
+    out = render_content_slide(TOC_SLIDE, req)
+    assert "課題認識" in out
+    assert "提案概要" in out
+    assert "推進体制" in out
+    assert "項目タイトル" not in out
+
+
+def test_toc_extra_slots_stripped_when_fewer_items() -> None:
+    req = RenderRequest(
+        slide_index=2,
+        layout="toc",
+        figure_type=None,
+        content={"items": ["課題認識", "提案概要"]},
+    )
+    out = render_content_slide(TOC_SLIDE, req)
+    assert "課題認識" in out and "提案概要" in out
+    # The third "項目タイトル" slot has no item; the shape gets dropped.
+    assert "項目タイトル" not in out
