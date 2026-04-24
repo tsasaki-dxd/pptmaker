@@ -133,8 +133,9 @@ def test_body_placeholder_stripped_when_figure_renders() -> None:
 
 
 def test_body_placeholder_kept_when_no_figure() -> None:
-    """If the blueprint slide has no figure_type, we're only
-    substituting text; leave the template alone otherwise."""
+    """Even with no figure, template placeholder prompt text must not
+    leak through — it's filler, not content. The non-placeholder
+    "CONTENT" decoration label stays."""
     req = RenderRequest(
         slide_index=1,
         layout="content",
@@ -142,5 +143,52 @@ def test_body_placeholder_kept_when_no_figure() -> None:
         content={"title": "新タイトル"},
     )
     out = render_content_slide(SLIDE_WITH_BODY_PLACEHOLDER, req)
-    assert "本文をここに入れる" in out  # still there
+    assert "本文をここに入れる" not in out
     assert "新タイトル" in out
+    assert "CONTENT" in out
+
+
+# Templates where prompt text sits in plain decoration text boxes
+# (no <p:ph> marker). This pattern is common in Japanese corporate
+# decks and was leaking through on every rendered slide before the
+# prompt-pattern stripper was added.
+SLIDE_WITH_DECORATION_PROMPTS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<p:cSld><p:spTree>
+<p:sp><p:nvSpPr><p:cNvPr id="1" name="t"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+<p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>コンテンツタイトル</a:t></a:r></a:p></p:txBody></p:sp>
+<p:sp><p:nvSpPr><p:cNvPr id="2" name="b"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+<p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>本文 / 図解 / 表をここに配置</a:t></a:r></a:p></p:txBody></p:sp>
+<p:sp><p:nvSpPr><p:cNvPr id="3" name="brand"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+<p:spPr/><p:txBody><a:bodyPr/><a:p><a:r><a:t>DXデザインシステム株式会社</a:t></a:r></a:p></p:txBody></p:sp>
+</p:spTree></p:cSld></p:sld>"""
+
+
+def test_decoration_prompt_title_is_replaced_not_left() -> None:
+    req = RenderRequest(
+        slide_index=1,
+        layout="content",
+        figure_type=None,
+        content={"title": "現状と理想のギャップ"},
+    )
+    out = render_content_slide(SLIDE_WITH_DECORATION_PROMPTS, req)
+    assert "コンテンツタイトル" not in out
+    assert "現状と理想のギャップ" in out
+    assert "本文 / 図解 / 表をここに配置" not in out
+    # Non-prompt decoration (brand name) stays.
+    assert "DXデザインシステム株式会社" in out
+
+
+def test_decoration_prompt_stripped_even_without_title() -> None:
+    req = RenderRequest(
+        slide_index=1,
+        layout="section_divider",
+        figure_type=None,
+        content={},
+    )
+    out = render_content_slide(SLIDE_WITH_DECORATION_PROMPTS, req)
+    # Both the title prompt and body prompt are filler; drop them.
+    assert "コンテンツタイトル" not in out
+    assert "本文 / 図解 / 表をここに配置" not in out
+    assert "DXデザインシステム株式会社" in out
