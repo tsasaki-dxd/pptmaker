@@ -349,17 +349,26 @@ class AppStack(cdk.Stack):
             # as a top-level module, and main.py's `from .config import
             # ...` relative imports fail with ImportModuleError because
             # a top-level module has no parent package.
+            #
+            # Also bundle `render/` at the package root because api code
+            # transitively imports `render.figure_renderers` (for the
+            # dynamic LLM prompt catalog) and `render.slot_extractor`
+            # (for template analysis / lazy slot migration). Omitting
+            # it makes Lambda init crash with ModuleNotFoundError and
+            # API Gateway returns `{"message":"Internal Server Error"}`
+            # for every request.
             handler="api.main.handler",
             code=lambda_.Code.from_asset(
-                str(REPO_ROOT / "app" / "api"),
+                str(REPO_ROOT / "app"),
                 bundling=cdk.BundlingOptions(
                     image=lambda_.Runtime.PYTHON_3_12.bundling_image,
                     command=[
                         "bash",
                         "-c",
-                        "pip install --no-cache-dir -r requirements.txt -t /asset-output "
-                        "&& mkdir -p /asset-output/api "
-                        "&& cp -r . /asset-output/api/",
+                        "pip install --no-cache-dir -r api/requirements.txt -t /asset-output "
+                        "&& mkdir -p /asset-output/api /asset-output/render "
+                        "&& cp -r api/. /asset-output/api/ "
+                        "&& cp -r render/. /asset-output/render/",
                     ],
                 ),
             ),
@@ -408,16 +417,21 @@ class AppStack(cdk.Stack):
             function_name=f"slideforge-{stage_name}-blueprint-worker",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="api.blueprint_worker.handler",
+            # Share the same bundle layout as the API Lambda (api/ + render/
+            # at the package root). The worker loads `api.services.llm`,
+            # which pulls in `api.prompts.builder` -> `render.figure_renderers`
+            # at import time.
             code=lambda_.Code.from_asset(
-                str(REPO_ROOT / "app" / "api"),
+                str(REPO_ROOT / "app"),
                 bundling=cdk.BundlingOptions(
                     image=lambda_.Runtime.PYTHON_3_12.bundling_image,
                     command=[
                         "bash",
                         "-c",
-                        "pip install --no-cache-dir -r requirements.txt -t /asset-output "
-                        "&& mkdir -p /asset-output/api "
-                        "&& cp -r . /asset-output/api/",
+                        "pip install --no-cache-dir -r api/requirements.txt -t /asset-output "
+                        "&& mkdir -p /asset-output/api /asset-output/render "
+                        "&& cp -r api/. /asset-output/api/ "
+                        "&& cp -r render/. /asset-output/render/",
                     ],
                 ),
             ),
