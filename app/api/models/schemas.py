@@ -145,6 +145,11 @@ class SlideMappingPatch(BaseModel):
 
 class RevisionCreate(BaseModel):
     instruction: str = Field(min_length=1, max_length=2000)
+    # 1-based slide index to scope the revision to. When set, the LLM
+    # is instructed to only modify /slides/{index-1}/... and the server
+    # rejects any patch op that escapes that subtree. Lets the UI fire
+    # "rewrite this one slide" without risking bleed into siblings.
+    slide_index: int | None = Field(default=None, ge=1)
 
 
 class Revision(BaseModel):
