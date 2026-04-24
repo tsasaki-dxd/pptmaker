@@ -16,7 +16,6 @@ type Step = 'input' | 'reviewing' | 'rendering' | 'done';
 
 export default function ProjectsPage() {
   const [templates, setTemplates] = useState<TemplateProfile[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
 
   // Step 1 form
   const [name, setName] = useState('');
@@ -32,13 +31,9 @@ export default function ProjectsPage() {
   const [revisionText, setRevisionText] = useState('');
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState<string[]>([]);
-  const [previewModal, setPreviewModal] = useState<{
-    projectName: string;
-    slides: { slide_index: number; url: string }[];
-  } | null>(null);
   // Post-render preview (Step 3 / done state). Loaded after render
   // completes so the user can eyeball every slide and fire per-slide
-  // revisions from the same screen without hopping to the list modal.
+  // revisions from the same screen.
   const [stepPreviews, setStepPreviews] = useState<
     { slide_index: number; url: string }[]
   >([]);
@@ -47,12 +42,11 @@ export default function ProjectsPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const [t, p] = await Promise.all([api.listTemplates(), api.listProjects()]);
+      const t = await api.listTemplates();
       setTemplates(t);
-      setProjects(p);
       if (t.length && !templateId) setTemplateId(t[0].id);
     } catch (e) {
-      push(`一覧取得失敗: ${String(e)}`);
+      push(`テンプレ一覧取得失敗: ${String(e)}`);
     }
   }, [templateId]);
 
@@ -290,56 +284,12 @@ export default function ProjectsPage() {
     setStepPreviews([]);
   }
 
-  async function handleOpenPreviewGallery(p: Project) {
-    try {
-      const res = await api.listPreviews(p.id);
-      setPreviewModal({ projectName: p.name, slides: res.slides });
-    } catch (e) {
-      push(`プレビュー取得失敗: ${String(e)}`);
-    }
-  }
-
   async function handleExport(projectId: string, format: 'pptx' | 'pdf') {
     try {
       const res = await api.exportUrl(projectId, format);
       window.open(res.url, '_blank');
     } catch (e) {
       push(`export 取得失敗: ${String(e)}`);
-    }
-  }
-
-  async function handleDeleteProject(p: Project) {
-    if (!window.confirm(`「${p.name}」を削除しますか？レンダリング済みファイルも消えます。`)) return;
-    try {
-      await api.deleteProject(p.id);
-      push(`削除: ${p.name}`);
-      await refresh();
-    } catch (e) {
-      push(`削除失敗: ${String(e)}`);
-    }
-  }
-
-  async function handleDuplicateProject(p: Project) {
-    setBusy(true);
-    setLog([]);
-    try {
-      push(`複製中: ${p.name}`);
-      const copied = await api.duplicateProject(p.id);
-      push(`複製完了: ${copied.id}`);
-
-      // Land in Step 2 with the copied blueprint pre-loaded so the
-      // user can keep editing right where they'd want to.
-      const t = await api.getTemplate(copied.template_id);
-      setSelectedTemplate(t);
-      setProject(copied);
-      const bp = await api.getBlueprint(copied.id);
-      setBlueprint(bp);
-      setStep('reviewing');
-      await refresh();
-    } catch (e) {
-      push(`複製失敗: ${String(e)}`);
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -401,79 +351,7 @@ export default function ProjectsPage() {
       {log.length > 0 && (
         <pre className="whitespace-pre-wrap rounded bg-off p-3 text-xs">{log.join('\n')}</pre>
       )}
-
-      <ProjectsList
-        projects={projects}
-        onPreview={handleOpenPreviewGallery}
-        onExport={handleExport}
-        onDuplicate={handleDuplicateProject}
-        onDelete={handleDeleteProject}
-        busy={busy}
-      />
-
-      {previewModal && (
-        <PreviewModal
-          projectName={previewModal.projectName}
-          slides={previewModal.slides}
-          onClose={() => setPreviewModal(null)}
-        />
-      )}
     </section>
-  );
-}
-
-function PreviewModal(props: {
-  projectName: string;
-  slides: { slide_index: number; url: string }[];
-  onClose: () => void;
-}) {
-  const { projectName, slides, onClose } = props;
-  return (
-    <div
-      className="fixed inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/60 p-6"
-      onClick={onClose}
-    >
-      <div
-        className="my-8 w-full max-w-5xl rounded bg-white p-4 shadow-lg"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-3 flex items-baseline justify-between">
-          <div>
-            <h3 className="text-base font-bold">{projectName} — プレビュー</h3>
-            <div className="text-xs text-muted">全 {slides.length} 枚</div>
-          </div>
-          <button
-            onClick={onClose}
-            className="rounded border border-purple-lt px-3 py-1 text-sm hover:bg-purple-lt/20"
-          >
-            閉じる
-          </button>
-        </div>
-        {slides.length === 0 ? (
-          <p className="text-sm text-muted">プレビュー画像がありません。</p>
-        ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {slides.map((s) => (
-              <a
-                key={s.slide_index}
-                href={s.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block overflow-hidden rounded border border-purple-lt/60"
-              >
-                <img
-                  src={s.url}
-                  alt={`slide ${s.slide_index}`}
-                  className="w-full"
-                  loading="lazy"
-                />
-                <div className="px-2 py-1 text-xs text-muted">#{s.slide_index}</div>
-              </a>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
   );
 }
 
@@ -832,7 +710,10 @@ function FieldView({ name, value }: { name: string; value: unknown }) {
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// Step 3: render result — preview grid (left) + revise side panel (right)
+// Step 3: render result — preview on the left (grid or single w/ nav),
+// revise side panel on the right. Viewport-height container; preview +
+// revise panel scroll independently so browser scroll never kicks in,
+// and the revise panel is always reachable without chasing it.
 // ──────────────────────────────────────────────────────────────────────
 function Step3Result(props: {
   step: Step;
@@ -845,8 +726,8 @@ function Step3Result(props: {
 }) {
   const { step, project, previews, onStartOver, onExport, onReviseAndRender, busy } = props;
   const [selected, setSelected] = useState<number | null>(null);
+  const [mode, setMode] = useState<'grid' | 'single'>('grid');
   const [revision, setRevision] = useState('');
-  const [lightbox, setLightbox] = useState<{ url: string; index: number } | null>(null);
 
   const scopeLabel = selected !== null ? `スライド#${selected}` : '全体';
 
@@ -856,9 +737,28 @@ function Step3Result(props: {
     setRevision('');
   }
 
+  function openSingle(slideIndex: number) {
+    setSelected(slideIndex);
+    setMode('single');
+  }
+
+  function changeSingle(delta: number) {
+    if (selected === null || previews.length === 0) return;
+    const idx = previews.findIndex((s) => s.slide_index === selected);
+    if (idx < 0) return;
+    const next = Math.min(previews.length - 1, Math.max(0, idx + delta));
+    setSelected(previews[next].slide_index);
+  }
+
+  const selectedPreview =
+    selected !== null ? previews.find((s) => s.slide_index === selected) ?? null : null;
+
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2 rounded border border-purple-lt/60 bg-white p-4">
+    <div
+      className="flex flex-col gap-3"
+      style={{ height: 'calc(100vh - 10rem)' }}
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-2 rounded border border-purple-lt/60 bg-white px-4 py-2">
         <h3 className="text-sm font-bold text-muted">Step 3: レンダリング結果</h3>
         <div className="flex gap-2">
           {project && step === 'done' && (
@@ -892,51 +792,128 @@ function Step3Result(props: {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="rounded border border-purple-lt/60 bg-white p-4 lg:col-span-2">
-          {step === 'rendering' ? (
-            <p className="text-sm">レンダリング中...</p>
-          ) : previews.length === 0 ? (
-            <p className="text-sm text-muted">プレビュー画像がありません。</p>
-          ) : (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {previews.map((s) => {
-                const isSelected = selected === s.slide_index;
-                return (
-                  <button
-                    key={s.slide_index}
-                    onClick={() => setSelected(isSelected ? null : s.slide_index)}
-                    onDoubleClick={() => setLightbox({ url: s.url, index: s.slide_index })}
-                    className={`overflow-hidden rounded border text-left transition ${
-                      isSelected
-                        ? 'border-purple shadow-md ring-2 ring-purple/40'
-                        : 'border-purple-lt/60 hover:border-purple'
-                    }`}
-                    type="button"
-                  >
-                    <img src={s.url} alt={`slide ${s.slide_index}`} className="w-full" loading="lazy" />
-                    <div className="flex items-center justify-between px-2 py-1 text-xs">
-                      <span className="text-muted">#{s.slide_index}</span>
-                      {isSelected && <span className="font-bold text-purple">選択中</span>}
-                    </div>
-                  </button>
-                );
-              })}
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-3">
+        {/* preview column */}
+        <div className="flex min-h-0 flex-col rounded border border-purple-lt/60 bg-white lg:col-span-2">
+          <div className="flex shrink-0 items-center justify-between border-b border-purple-lt/50 px-3 py-2">
+            <div className="flex items-center gap-2 text-xs">
+              <button
+                onClick={() => setMode('grid')}
+                disabled={mode === 'grid'}
+                className={`rounded border px-2 py-1 ${
+                  mode === 'grid'
+                    ? 'border-purple bg-purple-lt/30 text-purple'
+                    : 'border-purple-lt text-muted hover:bg-purple-lt/20'
+                }`}
+                type="button"
+              >
+                グリッド
+              </button>
+              <button
+                onClick={() => {
+                  if (selected === null && previews.length > 0) {
+                    setSelected(previews[0].slide_index);
+                  }
+                  setMode('single');
+                }}
+                disabled={mode === 'single' || previews.length === 0}
+                className={`rounded border px-2 py-1 ${
+                  mode === 'single'
+                    ? 'border-purple bg-purple-lt/30 text-purple'
+                    : 'border-purple-lt text-muted hover:bg-purple-lt/20'
+                }`}
+                type="button"
+              >
+                拡大
+              </button>
             </div>
-          )}
-          {previews.length > 0 && (
-            <p className="mt-2 text-xs text-muted">
-              クリック=修正対象に選択 / ダブルクリック=拡大
+            {mode === 'single' && selectedPreview && (
+              <div className="flex items-center gap-2 text-xs">
+                <button
+                  onClick={() => changeSingle(-1)}
+                  disabled={previews.findIndex((s) => s.slide_index === selected) <= 0}
+                  className="rounded border border-purple-lt px-2 py-1 hover:bg-purple-lt/20 disabled:opacity-40"
+                  type="button"
+                >
+                  ← 前
+                </button>
+                <span className="text-muted">
+                  #{selectedPreview.slide_index} / {previews.length}
+                </span>
+                <button
+                  onClick={() => changeSingle(1)}
+                  disabled={
+                    previews.findIndex((s) => s.slide_index === selected) >= previews.length - 1
+                  }
+                  className="rounded border border-purple-lt px-2 py-1 hover:bg-purple-lt/20 disabled:opacity-40"
+                  type="button"
+                >
+                  次 →
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            {step === 'rendering' ? (
+              <p className="text-sm">レンダリング中...</p>
+            ) : previews.length === 0 ? (
+              <p className="text-sm text-muted">プレビュー画像がありません。</p>
+            ) : mode === 'grid' ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {previews.map((s) => {
+                  const isSelected = selected === s.slide_index;
+                  return (
+                    <button
+                      key={s.slide_index}
+                      onClick={() => setSelected(isSelected ? null : s.slide_index)}
+                      onDoubleClick={() => openSingle(s.slide_index)}
+                      className={`overflow-hidden rounded border text-left transition ${
+                        isSelected
+                          ? 'border-purple shadow-md ring-2 ring-purple/40'
+                          : 'border-purple-lt/60 hover:border-purple'
+                      }`}
+                      type="button"
+                    >
+                      <img
+                        src={s.url}
+                        alt={`slide ${s.slide_index}`}
+                        className="w-full"
+                        loading="lazy"
+                      />
+                      <div className="flex items-center justify-between px-2 py-1 text-xs">
+                        <span className="text-muted">#{s.slide_index}</span>
+                        {isSelected && <span className="font-bold text-purple">選択中</span>}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : selectedPreview ? (
+              <img
+                src={selectedPreview.url}
+                alt={`slide ${selectedPreview.slide_index}`}
+                className="mx-auto max-h-full max-w-full object-contain"
+              />
+            ) : (
+              <p className="text-sm text-muted">スライドを選択してください。</p>
+            )}
+          </div>
+
+          {mode === 'grid' && previews.length > 0 && (
+            <p className="shrink-0 border-t border-purple-lt/50 px-3 py-1 text-xs text-muted">
+              クリック=選択 / ダブルクリック=拡大表示
             </p>
           )}
         </div>
 
-        <div className="rounded border border-purple-lt/60 bg-white p-4">
+        {/* revise column */}
+        <div className="flex min-h-0 flex-col overflow-y-auto rounded border border-purple-lt/60 bg-white p-4">
           <div className="mb-2 flex items-baseline justify-between">
             <h4 className="text-sm font-bold">修正指示</h4>
             <span className="text-xs text-muted">{scopeLabel}</span>
           </div>
-          <div className="mb-2 flex gap-2 text-xs">
+          <div className="mb-2 flex flex-wrap gap-2 text-xs">
             <button
               onClick={() => setSelected(null)}
               disabled={busy}
@@ -962,7 +939,7 @@ function Step3Result(props: {
                 : '例: 全体的にカジュアルな言い回しに書き換えて'
             }
             disabled={busy || step !== 'done'}
-            className="min-h-[100px] w-full rounded border border-purple-lt px-3 py-2 text-sm"
+            className="min-h-[120px] w-full rounded border border-purple-lt px-3 py-2 text-sm"
           />
           <button
             onClick={submit}
@@ -974,117 +951,7 @@ function Step3Result(props: {
           </button>
         </div>
       </div>
-
-      {lightbox && (
-        <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 p-4"
-          onClick={() => setLightbox(null)}
-        >
-          <img
-            src={lightbox.url}
-            alt={`slide ${lightbox.index}`}
-            className="max-h-full max-w-full"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-      )}
     </div>
   );
 }
 
-// ──────────────────────────────────────────────────────────────────────
-// Persistent project list
-// ──────────────────────────────────────────────────────────────────────
-function ProjectsList(props: {
-  projects: Project[];
-  onPreview: (p: Project) => void;
-  onExport: (id: string, format: 'pptx' | 'pdf') => void;
-  onDuplicate: (p: Project) => void;
-  onDelete: (p: Project) => void;
-  busy: boolean;
-}) {
-  const { projects, onPreview, onExport, onDuplicate, onDelete, busy } = props;
-  return (
-    <div>
-      <h3 className="mb-2 text-lg font-bold">プロジェクト一覧</h3>
-      {projects.length === 0 ? (
-        <p className="text-sm text-muted">まだありません</p>
-      ) : (
-        <ul className="space-y-2">
-          {projects.map((p) => (
-            <li
-              key={p.id}
-              className="space-y-2 rounded border border-purple-lt/60 bg-white p-3 text-sm"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div>
-                    <span className="font-medium text-dark">{p.name}</span>
-                    <span className="ml-2 rounded bg-purple-lt/40 px-2 py-0.5 text-xs">{p.status}</span>
-                  </div>
-                  <div className="font-mono text-xs text-muted">{p.id}</div>
-                </div>
-                <div className="flex shrink-0 gap-1">
-                  <button
-                    onClick={() => onDuplicate(p)}
-                    disabled={busy}
-                    className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20 disabled:opacity-50"
-                  >
-                    複製
-                  </button>
-                  <button
-                    onClick={() => onDelete(p)}
-                    disabled={busy}
-                    className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20 disabled:opacity-50"
-                  >
-                    削除
-                  </button>
-                </div>
-              </div>
-              {p.status === 'draft' ? (
-                <div className="text-xs text-muted">未着手</div>
-              ) : p.status === 'rendering' ? (
-                <div className="text-xs text-muted">レンダリング中...</div>
-              ) : p.status === 'failed' ? (
-                <div className="text-xs text-red-600">レンダリング失敗</div>
-              ) : p.status === 'partial' ? (
-                <div className="space-y-1">
-                  <div className="text-xs text-amber-700">
-                    .pptx は出力済み (プレビュー / PDF はエラー)
-                  </div>
-                  <button
-                    onClick={() => onExport(p.id, 'pptx')}
-                    className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20"
-                  >
-                    .pptx
-                  </button>
-                </div>
-              ) : (
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => onPreview(p)}
-                    className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20"
-                  >
-                    プレビュー
-                  </button>
-                  <button
-                    onClick={() => onExport(p.id, 'pptx')}
-                    className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20"
-                  >
-                    .pptx
-                  </button>
-                  <button
-                    onClick={() => onExport(p.id, 'pdf')}
-                    className="rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20"
-                  >
-                    .pdf
-                  </button>
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}

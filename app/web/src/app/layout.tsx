@@ -20,7 +20,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </a>
             <nav className="flex items-center gap-4 text-sm">
               <a href="/templates/">テンプレート</a>
-              <a href="/projects/">プロジェクト</a>
+              <a href="/projects/">新規作成</a>
+              <a href="/projects/list/">プロジェクト一覧</a>
               <SignOutButton />
             </nav>
           </div>
