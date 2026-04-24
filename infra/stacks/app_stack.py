@@ -314,6 +314,13 @@ class AppStack(cdk.Stack):
                 "S3_BUCKET": self.artifacts_bucket.bucket_name,
                 "DB_SECRET_ARN": self.db_secret.secret_arn,
                 "DB_ENDPOINT": self.db.instance_endpoint.hostname,
+                # Phase 2 render quality: slot-aware layout (strips body
+                # placeholders even for text-only / section-divider slides,
+                # so "本文 / 図解 / 表をここに配置" stops bleeding through)
+                # + theme color inheritance (pulls palette from the uploaded
+                # template's theme.xml instead of always using DEFAULT_PALETTE).
+                "FF_SLOT_RENDER": "1",
+                "FF_THEME_INHERITANCE": "1",
             },
         )
         self.artifacts_bucket.grant_read_write(self.render_function)
@@ -449,6 +456,10 @@ class AppStack(cdk.Stack):
                 # Cognito not needed — worker is invoked by SQS, never
                 # handles a user token directly.
                 "ANTHROPIC_API_KEY_SECRET": anthropic_secret.secret_name,
+                # Phase 2 blueprint quality: inject the dynamic figure-type
+                # catalog (with per-figure input_schema_example) into the
+                # LLM system prompt instead of the static .txt fallback.
+                "FF_DYNAMIC_PROMPT_CATALOG": "1",
             },
         )
         self.blueprint_worker_function.add_event_source(
