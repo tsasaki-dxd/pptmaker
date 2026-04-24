@@ -255,8 +255,12 @@ export default function ProjectsPage() {
   async function pollRenderComplete(
     projectId: string,
   ): Promise<'complete' | 'partial' | 'failed'> {
+    // Total poll window = intervalMs * maxAttempts. Bumped to
+    // 10 min (3s * 200) to cover the layout-designer LLM path,
+    // which adds LLM latency to the baseline render. Lambda /
+    // SQS visibility are both 10 min, so this matches.
     const intervalMs = 3000;
-    const maxAttempts = 100;
+    const maxAttempts = 200;
     const startedAt = Date.now();
     for (let i = 0; i < maxAttempts; i++) {
       const p = await api.getProject(projectId);
@@ -267,12 +271,12 @@ export default function ProjectsPage() {
       if (i > 0 && i % 5 === 0) {
         setLog((prev) => [
           ...prev.slice(0, -1),
-          `レンダリング polling... (${elapsed}s / 300s, status=${p.status})`,
+          `レンダリング polling... (${elapsed}s / 600s, status=${p.status})`,
         ]);
       }
       await new Promise((r) => setTimeout(r, intervalMs));
     }
-    throw new Error('レンダリングがタイムアウトしました（5分経過）');
+    throw new Error('レンダリングがタイムアウトしました（10分経過）');
   }
 
   function handleStartOver() {

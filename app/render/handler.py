@@ -190,6 +190,96 @@ def _resolve_template_meta(job: RenderJob) -> Any | None:
     return load_template_meta(template_id)
 
 
+# Max concurrent designer calls. Anthropic's Tier 1 rate limit is
+# around 50 RPM for Sonnet — 8 concurrent comfortably stays under
+# that even with the 5-15s per-call duration we've seen.
+_DESIGNER_MAX_CONCURRENCY = 8
+
+
+def _submit_designer_batch(
+    *,
+    blueprint_slides: list[dict[str, Any]],
+    template_meta: Any | None,
+    designer_llm: Any | None,
+) -> dict[int, Any]:
+    """Kick off designer calls for every eligible slide in parallel
+    and return a ``{slide_index_1based: Future[LayoutSpec | None]}``
+    map. Slides with no body_box (cover/about/disclaimer/etc.) are
+    mapped to an immediately-resolved None so the render loop's
+    lookup stays uniform.
+
+    Parallelism matters: 16 serial calls at 10s each = 160s just for
+    LLM, on top of ~60s deterministic render time, overshoots the
+    5-minute Lambda timeout. ThreadPoolExecutor collapses the wait
+    to roughly the slowest single call.
+    """
+    from concurrent.futures import Future, ThreadPoolExecutor
+
+    futures: dict[int, Any] = {}
+    if designer_llm is None or template_meta is None:
+        return futures
+
+    executor = ThreadPoolExecutor(
+        max_workers=_DESIGNER_MAX_CONCURRENCY,
+        thread_name_prefix="designer",
+    )
+
+    for i, slide in enumerate(blueprint_slides, start=1):
+        layout = slide.get("layout", "content")
+        page_meta = template_meta.page_for(layout)
+        if page_meta is None or page_meta.body_box is None:
+            # Pre-resolved None so the render loop doesn't have to
+            # special-case "no future submitted for this slide".
+            done: Future[Any] = Future()
+            done.set_result(None)
+            futures[i] = done
+            continue
+        body_rect = (
+            page_meta.body_box.x_emu,
+            page_meta.body_box.y_emu,
+            page_meta.body_box.w_emu,
+            page_meta.body_box.h_emu,
+        )
+        futures[i] = executor.submit(
+            design_layout,
+            slide=slide,
+            template_page_meta=page_meta.model_dump(mode="python"),
+            body_rect=body_rect,
+            llm=designer_llm,
+        )
+
+    # Let the executor keep running after we return; futures hold
+    # their own references. Shutdown happens implicitly when the
+    # last future is awaited.
+    executor.shutdown(wait=False)
+    return futures
+
+
+def _collect_designer_result(
+    futures: dict[int, Any], slide_index: int
+) -> Any | None:
+    """Block on the future for one slide and unwrap it. Any designer
+    exception degrades to None (caller falls back to deterministic
+    rendering) so one bad slide doesn't kill the deck."""
+    fut = futures.get(slide_index)
+    if fut is None:
+        return None
+    try:
+        return fut.result(timeout=45)
+    except Exception:
+        log.exception("layout designer future failed for slide %d", slide_index)
+        return None
+
+
+def _emit_spec_if_any(
+    spec: Any | None, *, start_shape_id: int
+) -> list[str] | None:
+    if spec is None:
+        return None
+    fragments, _next_id = emit_layout_spec(spec, start_shape_id=start_shape_id)
+    return fragments
+
+
 def _maybe_design_layout(
     *,
     slide: dict[str, Any],
@@ -200,10 +290,9 @@ def _maybe_design_layout(
     designer_llm: Any | None,
     start_shape_id: int,
 ) -> list[str] | None:
-    """Run the LLM layout designer for this slide and return the
-    emitted shape XML, or None when the designer wasn't invoked /
-    failed validation. Caller passes the result to
-    ``render_content_slide(extra_shapes_xml=...)``.
+    """Serial-path designer call, kept for unit tests / single-slide
+    entry points. The production render loop uses the batch form
+    (_submit_designer_batch + _collect_designer_result) instead.
     """
     if designer_llm is None or template_meta is None:
         return None
@@ -274,6 +363,18 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
         designer_llm = _build_designer_llm() if _designer_enabled() else None
         template_meta = _resolve_template_meta(job)
 
+        # Kick off every designer call in parallel before the render
+        # loop — each LLM call is 5-15s IO-bound, and serialising 16
+        # of them blows past the Lambda's 5-minute timeout. A thread
+        # pool (the SDK is synchronous per call but HTTP-bound so the
+        # GIL isn't a bottleneck) collapses the total wait into
+        # roughly the slowest single request.
+        designer_futures = _submit_designer_batch(
+            blueprint_slides=blueprint_slides,
+            template_meta=template_meta,
+            designer_llm=designer_llm,
+        )
+
         skipped: list[int] = []
         for i, (slide, src_xml) in enumerate(
             zip(blueprint_slides, xmls, strict=True), start=1
@@ -287,15 +388,8 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
             layout_entry = layout_by_index.get(chosen[i - 1]) or {}
             slots = list(layout_entry.get("slots") or [])
 
-            extra_shapes_xml = _maybe_design_layout(
-                slide=slide,
-                req=req,
-                src_xml=src_xml,
-                template_meta=template_meta,
-                slide_size=slide_size,
-                designer_llm=designer_llm,
-                start_shape_id=1000 + 100 * i,
-            )
+            spec = _collect_designer_result(designer_futures, i)
+            extra_shapes_xml = _emit_spec_if_any(spec, start_shape_id=1000 + 100 * i)
 
             try:
                 xmls[i - 1] = render_content_slide(
