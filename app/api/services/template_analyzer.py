@@ -69,20 +69,30 @@ def _rect_to_dict(rect: EMURect | None) -> dict[str, int] | None:
 
 
 def _slot_to_dict(slot: Slot) -> dict[str, Any]:
-    return {
+    # Flat x/y/w/h keys to match layout_renderer._slot_to_box expectations.
+    # See template_registry._slot_to_dict for the history note.
+    out: dict[str, Any] = {
         "id": slot.id,
         "kind": slot.kind,
-        "rect": _rect_to_dict(slot.rect),
         "role": slot.role,
         "idx": slot.idx,
     }
+    if slot.rect is not None:
+        out["x"] = slot.rect.x
+        out["y"] = slot.rect.y
+        out["w"] = slot.rect.cx
+        out["h"] = slot.rect.cy
+    return out
 
 
 def _fixed_to_dict(fixed: FixedElement) -> dict[str, Any]:
-    return {
-        "rect": _rect_to_dict(fixed.rect),
-        "element_type": fixed.element_type,
-    }
+    out: dict[str, Any] = {"element_type": fixed.element_type}
+    if fixed.rect is not None:
+        out["x"] = fixed.rect.x
+        out["y"] = fixed.rect.y
+        out["w"] = fixed.rect.cx
+        out["h"] = fixed.rect.cy
+    return out
 
 
 def _extract_slide_size(pptx_bytes: bytes) -> tuple[int, int] | None:

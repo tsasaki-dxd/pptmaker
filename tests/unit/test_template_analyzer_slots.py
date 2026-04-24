@@ -70,7 +70,11 @@ def test_happy_path_slots_attached_to_layouts(monkeypatch: pytest.MonkeyPatch) -
     assert title_slot["kind"] == "text"
     assert title_slot["role"] == "title"
     assert title_slot["idx"] == 0
-    assert title_slot["rect"] == {"x": 100, "y": 200, "cx": 300, "cy": 400}
+    # Flat rect format — layout_renderer reads slot["x"/"y"/"w"/"h"] directly.
+    assert title_slot["x"] == 100
+    assert title_slot["y"] == 200
+    assert title_slot["w"] == 300
+    assert title_slot["h"] == 400
 
     body_slot = layout1["slots"][1]
     assert body_slot["id"] == "body_main"

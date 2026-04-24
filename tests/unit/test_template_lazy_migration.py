@@ -107,13 +107,11 @@ def test_v1_0_profile_gets_slots_populated() -> None:
 
     assert len(result.layouts[0]["slots"]) == 1
     assert result.layouts[0]["slots"][0]["id"] == "title"
-    assert result.layouts[0]["slots"][0]["rect"] == {
-        "x": 100,
-        "y": 200,
-        "cx": 300,
-        "cy": 400,
-    }
-    assert result.layouts[1]["slots"][0]["rect"] == {"x": 1, "y": 2, "cx": 3, "cy": 4}
+    # Flat rect format — layout_renderer reads slot["x"/"y"/"w"/"h"] directly.
+    first = result.layouts[0]["slots"][0]
+    assert (first["x"], first["y"], first["w"], first["h"]) == (100, 200, 300, 400)
+    second = result.layouts[1]["slots"][0]
+    assert (second["x"], second["y"], second["w"], second["h"]) == (1, 2, 3, 4)
 
 
 def test_fetcher_none_returns_unchanged_with_warning(
