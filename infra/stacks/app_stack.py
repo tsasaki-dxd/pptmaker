@@ -392,6 +392,10 @@ class AppStack(cdk.Stack):
                 "DB_ENDPOINT": self.db.instance_endpoint.hostname,
                 "RENDER_QUEUE_URL": self.render_queue.queue_url,
                 "BLUEPRINT_QUEUE_URL": self.blueprint_queue.queue_url,
+                # Phase 2 blueprint quality: require headline_message on
+                # every SlideSpec. Must match the worker's setting so
+                # blueprints written with a placeholder also load back.
+                "FF_HEADLINE_REQUIRED": "1",
                 "COGNITO_USER_POOL_ID": self.user_pool.user_pool_id,
                 "COGNITO_CLIENT_ID": self.user_pool_client.user_pool_client_id,
                 "ANTHROPIC_API_KEY_SECRET": anthropic_secret.secret_name,
@@ -460,6 +464,10 @@ class AppStack(cdk.Stack):
                 # catalog (with per-figure input_schema_example) into the
                 # LLM system prompt instead of the static .txt fallback.
                 "FF_DYNAMIC_PROMPT_CATALOG": "1",
+                # Headline-message enforcement (Pydantic + sanitizer).
+                # Must match the API Lambda's setting so blueprints written
+                # here deserialize cleanly when read back via GET.
+                "FF_HEADLINE_REQUIRED": "1",
             },
         )
         self.blueprint_worker_function.add_event_source(

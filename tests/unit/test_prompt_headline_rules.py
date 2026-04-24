@@ -57,7 +57,7 @@ def test_enforcement_on_fills_placeholder_and_warns(
     slide: dict[str, Any] = {"index": 3, "layout": "content", "content": {}}
     with caplog.at_level(logging.WARNING, logger="slideforge.blueprint"):
         _enforce_headline_message(slide)
-    assert slide["headline_message"] == "[headline_message 未指定]"
+    assert slide["headline_message"] == "[headline_message 未指定]。"
     assert any("headline_message missing" in rec.message for rec in caplog.records)
 
 
@@ -73,7 +73,7 @@ def test_enforcement_on_blank_string_filled(
     }
     with caplog.at_level(logging.WARNING, logger="slideforge.blueprint"):
         _enforce_headline_message(slide)
-    assert slide["headline_message"] == "[headline_message 未指定]"
+    assert slide["headline_message"] == "[headline_message 未指定]。"
 
 
 def test_enforcement_on_preserves_existing_headline(
@@ -138,8 +138,8 @@ def test_title_restate_detection_silent_on_placeholder(
     slide: dict[str, Any] = {
         "index": 10,
         "layout": "content",
-        "content": {"title": "[headline_message 未指定]"},
-        "headline_message": "[headline_message 未指定]",
+        "content": {"title": "[headline_message 未指定]。"},
+        "headline_message": "[headline_message 未指定]。",
     }
     with caplog.at_level(logging.WARNING, logger="slideforge.blueprint"):
         _check_headline_not_title_restate(slide)

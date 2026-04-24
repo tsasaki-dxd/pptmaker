@@ -19,7 +19,7 @@ MAX_RETRIES = 2
 _VALID_FIGURE_TYPES = set(get_args(FigureType))
 _VALID_LAYOUTS = set(get_args(LayoutKind))
 
-_HEADLINE_PLACEHOLDER = "[headline_message 未指定]"
+_HEADLINE_PLACEHOLDER = "[headline_message 未指定]。"
 _HEADLINE_TITLE_OVERLAP_THRESHOLD = 0.70
 
 
