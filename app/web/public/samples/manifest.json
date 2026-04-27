@@ -1,0 +1,1273 @@
+[
+  {
+    "id": "channel_stacked",
+    "figure_type": "bar_chart",
+    "title": "チャネル積上げ",
+    "prompt": "販売チャネル (自社EC/モール/店舗) の積上げ売上",
+    "notes": "多系列 stacked。総量を比較。",
+    "image": "/samples/bar_chart/channel_stacked.png",
+    "spec": {
+      "slide_index": 1,
+      "shapes": [
+        {
+          "kind": "bar_chart",
+          "name": "channel_stacked",
+          "x": 765760,
+          "y": 1837360,
+          "w": 7612480,
+          "h": 2634640,
+          "items": null,
+          "series": [
+            {
+              "name": "自社EC",
+              "values": [
+                40.0,
+                55.0,
+                70.0,
+                90.0
+              ],
+              "color": null
+            },
+            {
+              "name": "モール",
+              "values": [
+                60.0,
+                65.0,
+                70.0,
+                80.0
+              ],
+              "color": null
+            },
+            {
+              "name": "店舗",
+              "values": [
+                20.0,
+                25.0,
+                28.0,
+                31.0
+              ],
+              "color": null
+            }
+          ],
+          "categories": [
+            "Q1",
+            "Q2",
+            "Q3",
+            "Q4"
+          ],
+          "mode": "stacked",
+          "orientation": "v",
+          "show_values": false,
+          "value_format": "{:g}",
+          "bar_color": "primary",
+          "axis_color": "border",
+          "label_color": "muted",
+          "value_color": "text_dark",
+          "font_size_pt": 10
+        }
+      ]
+    }
+  },
+  {
+    "id": "cost_mix_pct",
+    "figure_type": "bar_chart",
+    "title": "コスト構成比 100%",
+    "prompt": "原価構成比の年次推移を 100% 積上げで",
+    "notes": "多系列 stacked100。各年合計 100%。",
+    "image": "/samples/bar_chart/cost_mix_pct.png",
+    "spec": {
+      "slide_index": 1,
+      "shapes": [
+        {
+          "kind": "bar_chart",
+          "name": "cost_mix_pct",
+          "x": 765760,
+          "y": 1837360,
+          "w": 7612480,
+          "h": 2634640,
+          "items": null,
+          "series": [
+            {
+              "name": "人件費",
+              "values": [
+                55.0,
+                50.0,
+                45.0,
+                40.0
+              ],
+              "color": null
+            },
+            {
+              "name": "広告費",
+              "values": [
+                20.0,
+                25.0,
+                30.0,
+                35.0
+              ],
+              "color": null
+            },
+            {
+              "name": "その他",
+              "values": [
+                25.0,
+                25.0,
+                25.0,
+                25.0
+              ],
+              "color": null
+            }
+          ],
+          "categories": [
+            "FY21",
+            "FY22",
+            "FY23",
+            "FY24"
+          ],
+          "mode": "stacked100",
+          "orientation": "v",
+          "show_values": false,
+          "value_format": "{:g}",
+          "bar_color": "primary",
+          "axis_color": "border",
+          "label_color": "muted",
+          "value_color": "text_dark",
+          "font_size_pt": 10
+        }
+      ]
+    }
+  },
+  {
+    "id": "quarterly_v",
+    "figure_type": "bar_chart",
+    "title": "四半期売上 (縦棒)",
+    "prompt": "四半期売上のシンプルな縦棒グラフ",
+    "notes": "単系列・縦棒・値ラベル付き。",
+    "image": "/samples/bar_chart/quarterly_v.png",
+    "spec": {
+      "slide_index": 1,
+      "shapes": [
+        {
+          "kind": "bar_chart",
+          "name": "quarterly_revenue",
+          "x": 965760,
+          "y": 1837360,
+          "w": 7212480,
+          "h": 2634640,
+          "items": [
+            {
+              "label": "Q1",
+              "value": 120.0,
+              "color": null
+            },
+            {
+              "label": "Q2",
+              "value": 145.0,
+              "color": null
+            },
+            {
+              "label": "Q3",
+              "value": 168.0,
+              "color": null
+            },
+            {
+              "label": "Q4",
+              "value": 201.0,
+              "color": null
+            }
+          ],
+          "series": null,
+          "categories": null,
+          "mode": "grouped",
+          "orientation": "v",
+          "show_values": true,
+          "value_format": "{:g}",
+          "bar_color": "primary",
+          "axis_color": "border",
+          "label_color": "muted",
+          "value_color": "text_dark",
+          "font_size_pt": 10
+        }
+      ]
+    }
+  },
+  {
+    "id": "region_share_h",
+    "figure_type": "bar_chart",
+    "title": "地域別シェア (横棒)",
+    "prompt": "地域別売上構成比を横棒で並べたい",
+    "notes": "単系列・横棒・パーセント書式。",
+    "image": "/samples/bar_chart/region_share_h.png",
+    "spec": {
+      "slide_index": 1,
+      "shapes": [
+        {
+          "kind": "bar_chart",
+          "name": "region_share",
+          "x": 965760,
+          "y": 1837360,
+          "w": 7212480,
+          "h": 2634640,
+          "items": [
+            {
+              "label": "関東",
+              "value": 58.0,
+              "color": null
+            },
+            {
+              "label": "関西",
+              "value": 24.0,
+              "color": null
+            },
+            {
+              "label": "中部",
+              "value": 12.0,
+              "color": null
+            },
+            {
+              "label": "九州",
+              "value": 6.0,
+              "color": null
+            }
+          ],
+          "series": null,
+          "categories": null,
+          "mode": "grouped",
+          "orientation": "h",
+          "show_values": true,
+          "value_format": "{:g}%",
+          "bar_color": "primary",
+          "axis_color": "border",
+          "label_color": "muted",
+          "value_color": "text_dark",
+          "font_size_pt": 10
+        }
+      ]
+    }
+  },
+  {
+    "id": "yoy_grouped",
+    "figure_type": "bar_chart",
+    "title": "前年比較 (グループ棒)",
+    "prompt": "2023 vs 2024 の四半期売上を年並びで比較したい",
+    "notes": "多系列 grouped。",
+    "image": "/samples/bar_chart/yoy_grouped.png",
+    "spec": {
+      "slide_index": 1,
+      "shapes": [
+        {
+          "kind": "bar_chart",
+          "name": "yoy_grouped",
+          "x": 765760,
+          "y": 1837360,
+          "w": 7612480,
+          "h": 2634640,
+          "items": null,
+          "series": [
+            {
+              "name": "2023",
+              "values": [
+                80.0,
+                95.0,
+                110.0,
+                130.0
+              ],
+              "color": null
+            },
+            {
+              "name": "2024",
+              "values": [
+                120.0,
+                145.0,
+                168.0,
+                201.0
+              ],
+              "color": null
+            }
+          ],
+          "categories": [
+            "Q1",
+            "Q2",
+            "Q3",
+            "Q4"
+          ],
+          "mode": "grouped",
+          "orientation": "v",
+          "show_values": true,
+          "value_format": "{:g}",
+          "bar_color": "primary",
+          "axis_color": "border",
+          "label_color": "muted",
+          "value_color": "text_dark",
+          "font_size_pt": 10
+        }
+      ]
+    }
+  },
+  {
+    "id": "kpi_dashboard",
+    "figure_type": "composite",
+    "title": "KPI ダッシュボード",
+    "prompt": "売上・MAU・CVR・解約率を上段にカード、下段に YoY 棒グラフでまとめたダッシュボード",
+    "notes": "rect + pill + text + bar_chart の組合せ。",
+    "image": "/samples/composite/kpi_dashboard.png",
+    "spec": {
+      "slide_index": 1,
+      "shapes": [
+        {
+          "kind": "rect",
+          "name": "kpi_card_0",
+          "x": 465760,
+          "y": 1837360,
+          "w": 1953120,
+          "h": 900000,
+          "fill": "primary_bg",
+          "stroke": null,
+          "stroke_width_emu": 0,
+          "corner_radius_pct": 8
+        },
+        {
+          "kind": "pill",
+          "name": "kpi_pill_0",
+          "x": 525760,
+          "y": 1897360,
+          "w": 600000,
+          "h": 180000,
+          "text": "売上",
+          "fill": "primary",
+          "text_color": "white",
+          "size_pt": 9,
+          "font": null
+        },
+        {
+          "kind": "text",
+          "name": "kpi_value_0",
+          "x": 525760,
+          "y": 2117360,
+          "w": 1833120,
+          "h": 380000,
+          "paragraphs": [
+            {
+              "runs": [
+                {
+                  "text": "20.1億",
+                  "size_pt": 26,
+                  "bold": true,
+                  "italic": false,
+                  "underline": false,
+                  "color": "text_dark"
+                }
+              ],
+              "align": "l",
+              "indent_level": 0,
+              "bullet": null,
+              "line_spacing_pct": 100,
+              "space_before_pt": 0,
+              "space_after_pt": 0
+            }
+          ],
+          "font": null,
+          "anchor": "t",
+          "auto_fit": true
+        },
+        {
+          "kind": "text",
+          "name": "kpi_delta_0",
+          "x": 525760,
+          "y": 2517360,
+          "w": 1833120,
+          "h": 180000,
+          "paragraphs": [
+            {
+              "runs": [
+                {
+                  "text": "+34%",
+                  "size_pt": 11,
+                  "bold": false,
+                  "italic": false,
+                  "underline": false,
+                  "color": "muted"
+                }
+              ],
+              "align": "l",
+              "indent_level": 0,
+              "bullet": null,
+              "line_spacing_pct": 100,
+              "space_before_pt": 0,
+              "space_after_pt": 0
+            }
+          ],
+          "font": null,
+          "anchor": "t",
+          "auto_fit": true
+        },
+        {
+          "kind": "rect",
+          "name": "kpi_card_1",
+          "x": 2518880,
+          "y": 1837360,
+          "w": 1953120,
+          "h": 900000,
+          "fill": "primary_bg",
+          "stroke": null,
+          "stroke_width_emu": 0,
+          "corner_radius_pct": 8
+        },
+        {
+          "kind": "pill",
+          "name": "kpi_pill_1",
+          "x": 2578880,
+          "y": 1897360,
+          "w": 600000,
+          "h": 180000,
+          "text": "MAU",
+          "fill": "amber",
+          "text_color": "white",
+          "size_pt": 9,
+          "font": null
+        },
+        {
+          "kind": "text",
+          "name": "kpi_value_1",
+          "x": 2578880,
+          "y": 2117360,
+          "w": 1833120,
+          "h": 380000,
+          "paragraphs": [
+            {
+              "runs": [
+                {
+                  "text": "52,000",
+                  "size_pt": 26,
+                  "bold": true,
+                  "italic": false,
+                  "underline": false,
+                  "color": "text_dark"
+                }
+              ],
+              "align": "l",
+              "indent_level": 0,
+              "bullet": null,
+              "line_spacing_pct": 100,
+              "space_before_pt": 0,
+              "space_after_pt": 0
+            }
+          ],
+          "font": null,
+          "anchor": "t",
+          "auto_fit": true
+        },
+        {
+          "kind": "text",
+          "name": "kpi_delta_1",
+          "x": 2578880,
+          "y": 2517360,
+          "w": 1833120,
+          "h": 180000,
+          "paragraphs": [
+            {
+              "runs": [
+                {
+                  "text": "+5.4×",
+                  "size_pt": 11,
+                  "bold": false,
+                  "italic": false,
+                  "underline": false,
+                  "color": "muted"
+                }
+              ],
+              "align": "l",
+              "indent_level": 0,
+              "bullet": null,
+              "line_spacing_pct": 100,
+              "space_before_pt": 0,
+              "space_after_pt": 0
+            }
+          ],
+          "font": null,
+          "anchor": "t",
+          "auto_fit": true
+        },
+        {
+          "kind": "rect",
+          "name": "kpi_card_2",
+          "x": 4572000,
+          "y": 1837360,
+          "w": 1953120,
+          "h": 900000,
+          "fill": "primary_bg",
+          "stroke": null,
+          "stroke_width_emu": 0,
+          "corner_radius_pct": 8
+        },
+        {
+          "kind": "pill",
+          "name": "kpi_pill_2",
+          "x": 4632000,
+          "y": 1897360,
+          "w": 600000,
+          "h": 180000,
+          "text": "CVR",
+          "fill": "green",
+          "text_color": "white",
+          "size_pt": 9,
+          "font": null
+        },
+        {
+          "kind": "text",
+          "name": "kpi_value_2",
+          "x": 4632000,
+          "y": 2117360,
+          "w": 1833120,
+          "h": 380000,
+          "paragraphs": [
+            {
+              "runs": [
+                {
+                  "text": "4.8%",
+                  "size_pt": 26,
+                  "bold": true,
+                  "italic": false,
+                  "underline": false,
+                  "color": "text_dark"
+                }
+              ],
+              "align": "l",
+              "indent_level": 0,
+              "bullet": null,
+              "line_spacing_pct": 100,
+              "space_before_pt": 0,
+              "space_after_pt": 0
+            }
+          ],
+          "font": null,
+          "anchor": "t",
+          "auto_fit": true
+        },
+        {
+          "kind": "text",
+          "name": "kpi_delta_2",
+          "x": 4632000,
+          "y": 2517360,
+          "w": 1833120,
+          "h": 180000,
+          "paragraphs": [
+            {
+              "runs": [
+                {
+                  "text": "+0.7pt",
+                  "size_pt": 11,
+                  "bold": false,
+                  "italic": false,
+                  "underline": false,
+                  "color": "muted"
+                }
+              ],
+              "align": "l",
+              "indent_level": 0,
+              "bullet": null,
+              "line_spacing_pct": 100,
+              "space_before_pt": 0,
+              "space_after_pt": 0
+            }
+          ],
+          "font": null,
+          "anchor": "t",
+          "auto_fit": true
+        },
+        {
+          "kind": "rect",
+          "name": "kpi_card_3",
+          "x": 6625120,
+          "y": 1837360,
+          "w": 1953120,
+          "h": 900000,
+          "fill": "primary_bg",
+          "stroke": null,
+          "stroke_width_emu": 0,
+          "corner_radius_pct": 8
+        },
+        {
+          "kind": "pill",
+          "name": "kpi_pill_3",
+          "x": 6685120,
+          "y": 1897360,
+          "w": 600000,
+          "h": 180000,
+          "text": "解約率",
+          "fill": "muted",
+          "text_color": "white",
+          "size_pt": 9,
+          "font": null
+        },
+        {
+          "kind": "text",
+          "name": "kpi_value_3",
+          "x": 6685120,
+          "y": 2117360,
+          "w": 1833120,
+          "h": 380000,
+          "paragraphs": [
+            {
+              "runs": [
+                {
+                  "text": "1.2%",
+                  "size_pt": 26,
+                  "bold": true,
+                  "italic": false,
+                  "underline": false,
+                  "color": "text_dark"
+                }
+              ],
+              "align": "l",
+              "indent_level": 0,
+              "bullet": null,
+              "line_spacing_pct": 100,
+              "space_before_pt": 0,
+              "space_after_pt": 0
+            }
+          ],
+          "font": null,
+          "anchor": "t",
+          "auto_fit": true
+        },
+        {
+          "kind": "text",
+          "name": "kpi_delta_3",
+          "x": 6685120,
+          "y": 2517360,
+          "w": 1833120,
+          "h": 180000,
+          "paragraphs": [
+            {
+              "runs": [
+                {
+                  "text": "-0.4pt",
+                  "size_pt": 11,
+                  "bold": false,
+                  "italic": false,
+                  "underline": false,
+                  "color": "muted"
+                }
+              ],
+              "align": "l",
+              "indent_level": 0,
+              "bullet": null,
+              "line_spacing_pct": 100,
+              "space_before_pt": 0,
+              "space_after_pt": 0
+            }
+          ],
+          "font": null,
+          "anchor": "t",
+          "auto_fit": true
+        },
+        {
+          "kind": "bar_chart",
+          "name": "dash_trend",
+          "x": 465760,
+          "y": 2837360,
+          "w": 8212480,
+          "h": 1534640,
+          "items": null,
+          "series": [
+            {
+              "name": "2023",
+              "values": [
+                80.0,
+                95.0,
+                110.0,
+                130.0
+              ],
+              "color": "muted"
+            },
+            {
+              "name": "2024",
+              "values": [
+                120.0,
+                145.0,
+                168.0,
+                201.0
+              ],
+              "color": "primary"
+            }
+          ],
+          "categories": [
+            "Q1",
+            "Q2",
+            "Q3",
+            "Q4"
+          ],
+          "mode": "grouped",
+          "orientation": "v",
+          "show_values": true,
+          "value_format": "{:g}",
+          "bar_color": "primary",
+          "axis_color": "border",
+          "label_color": "muted",
+          "value_color": "text_dark",
+          "font_size_pt": 10
+        }
+      ]
+    }
+  },
+  {
+    "id": "plan_comparison",
+    "figure_type": "composite",
+    "title": "プラン比較表",
+    "prompt": "Free/Standard/Pro のプラン比較。Pro 列をハイライト",
+    "notes": "text + table + ヘッダ列ハイライト + bold セル。",
+    "image": "/samples/composite/plan_comparison.png",
+    "spec": {
+      "slide_index": 1,
+      "shapes": [
+        {
+          "kind": "text",
+          "name": "lead_text",
+          "x": 565760,
+          "y": 1837360,
+          "w": 8012480,
+          "h": 400000,
+          "paragraphs": [
+            {
+              "runs": [
+                {
+                  "text": "新プランは全機能セットの中で最も低コスト",
+                  "size_pt": 14,
+                  "bold": true,
+                  "italic": false,
+                  "underline": false,
+                  "color": "text_dark"
+                }
+              ],
+              "align": "l",
+              "indent_level": 0,
+              "bullet": null,
+              "line_spacing_pct": 100,
+              "space_before_pt": 0,
+              "space_after_pt": 0
+            }
+          ],
+          "font": null,
+          "anchor": "t",
+          "auto_fit": true
+        },
+        {
+          "kind": "table",
+          "name": "plan_compare",
+          "x": 565760,
+          "y": 2337360,
+          "w": 8012480,
+          "h": 2034640,
+          "rows": [
+            [
+              "項目",
+              "Free",
+              "Standard",
+              {
+                "text": "Pro (新)",
+                "bold": null,
+                "align": null,
+                "fill": "primary",
+                "text_color": "white",
+                "col_span": 1,
+                "row_span": 1
+              }
+            ],
+            [
+              "月額料金",
+              "0円",
+              "5,000円",
+              {
+                "text": "9,800円",
+                "bold": true,
+                "align": null,
+                "fill": null,
+                "text_color": null,
+                "col_span": 1,
+                "row_span": 1
+              }
+            ],
+            [
+              "ストレージ",
+              "5GB",
+              "100GB",
+              {
+                "text": "無制限",
+                "bold": true,
+                "align": null,
+                "fill": null,
+                "text_color": null,
+                "col_span": 1,
+                "row_span": 1
+              }
+            ],
+            [
+              "サポート",
+              "FAQ のみ",
+              "メール",
+              {
+                "text": "24/7 電話 + メール",
+                "bold": true,
+                "align": null,
+                "fill": null,
+                "text_color": null,
+                "col_span": 1,
+                "row_span": 1
+              }
+            ],
+            [
+              "SLA",
+              "—",
+              "99.5%",
+              {
+                "text": "99.99%",
+                "bold": true,
+                "align": null,
+                "fill": null,
+                "text_color": null,
+                "col_span": 1,
+                "row_span": 1
+              }
+            ]
+          ],
+          "columns": [
+            {
+              "weight": 2.0,
+              "align": "l"
+            },
+            {
+              "weight": 1.0,
+              "align": "ctr"
+            },
+            {
+              "weight": 1.0,
+              "align": "ctr"
+            },
+            {
+              "weight": 1.0,
+              "align": "ctr"
+            }
+          ],
+          "column_weights": null,
+          "header": true,
+          "alt_row_bg": true,
+          "header_fill": "primary",
+          "header_text_color": "white",
+          "body_text_color": "text_dark",
+          "alt_row_fill": "primary_bg",
+          "border_color": "border",
+          "font_size_pt": 10
+        }
+      ]
+    }
+  },
+  {
+    "id": "kpi_trend",
+    "figure_type": "line_chart",
+    "title": "売上/原価/粗利の月次推移",
+    "prompt": "売上・原価・粗利の 3 本を月別に重ねて推移を見たい",
+    "notes": "3 系列・色分け。",
+    "image": "/samples/line_chart/kpi_trend.png",
+    "spec": {
+      "slide_index": 1,
+      "shapes": [
+        {
+          "kind": "line_chart",
+          "name": "kpi_trend",
+          "x": 765760,
+          "y": 1837360,
+          "w": 7612480,
+          "h": 2534640,
+          "series": [
+            {
+              "name": "売上",
+              "values": [
+                100.0,
+                110.0,
+                125.0,
+                145.0,
+                168.0,
+                201.0
+              ],
+              "color": "primary"
+            },
+            {
+              "name": "原価",
+              "values": [
+                60.0,
+                62.0,
+                70.0,
+                80.0,
+                90.0,
+                105.0
+              ],
+              "color": "muted"
+            },
+            {
+              "name": "粗利",
+              "values": [
+                40.0,
+                48.0,
+                55.0,
+                65.0,
+                78.0,
+                96.0
+              ],
+              "color": "amber"
+            }
+          ],
+          "x_labels": [
+            "1月",
+            "2月",
+            "3月",
+            "4月",
+            "5月",
+            "6月"
+          ],
+          "show_markers": true,
+          "axis_color": "border",
+          "label_color": "muted",
+          "line_width_emu": 19050,
+          "marker_radius_emu": 38100,
+          "font_size_pt": 9
+        }
+      ]
+    }
+  },
+  {
+    "id": "mau_trend",
+    "figure_type": "line_chart",
+    "title": "MAU 推移",
+    "prompt": "月次 MAU の伸びを折れ線で",
+    "notes": "単系列・マーカー付き。",
+    "image": "/samples/line_chart/mau_trend.png",
+    "spec": {
+      "slide_index": 1,
+      "shapes": [
+        {
+          "kind": "line_chart",
+          "name": "mau_trend",
+          "x": 765760,
+          "y": 1837360,
+          "w": 7612480,
+          "h": 2534640,
+          "series": [
+            {
+              "name": "MAU",
+              "values": [
+                10.0,
+                14.0,
+                18.0,
+                26.0,
+                38.0,
+                52.0
+              ],
+              "color": null
+            }
+          ],
+          "x_labels": [
+            "1月",
+            "2月",
+            "3月",
+            "4月",
+            "5月",
+            "6月"
+          ],
+          "show_markers": true,
+          "axis_color": "border",
+          "label_color": "muted",
+          "line_width_emu": 19050,
+          "marker_radius_emu": 38100,
+          "font_size_pt": 9
+        }
+      ]
+    }
+  },
+  {
+    "id": "market_share",
+    "figure_type": "pie_chart",
+    "title": "コース別シェア",
+    "prompt": "A/B/C コースとその他の構成比",
+    "notes": "4 スライス。ラベルは外側に手で添える運用。",
+    "image": "/samples/pie_chart/market_share.png",
+    "spec": {
+      "slide_index": 1,
+      "shapes": [
+        {
+          "kind": "pie_chart",
+          "name": "market_share",
+          "x": 1565760,
+          "y": 1937360,
+          "w": 2434640,
+          "h": 2434640,
+          "slices": [
+            {
+              "label": "Aコース",
+              "value": 45.0,
+              "color": null
+            },
+            {
+              "label": "Bコース",
+              "value": 30.0,
+              "color": null
+            },
+            {
+              "label": "Cコース",
+              "value": 15.0,
+              "color": null
+            },
+            {
+              "label": "その他",
+              "value": 10.0,
+              "color": null
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "id": "basic_quarterly",
+    "figure_type": "table",
+    "title": "四半期業績テーブル",
+    "prompt": "四半期ごとの売上・利益・利益率を表でまとめたい",
+    "notes": "ヘッダ行 + 行交互背景 + 列重み 2:1:1:1:1。",
+    "image": "/samples/table/basic_quarterly.png",
+    "spec": {
+      "slide_index": 1,
+      "shapes": [
+        {
+          "kind": "table",
+          "name": "basic_table",
+          "x": 565760,
+          "y": 1937360,
+          "w": 8012480,
+          "h": 2434640,
+          "rows": [
+            [
+              "項目",
+              "Q1",
+              "Q2",
+              "Q3",
+              "Q4"
+            ],
+            [
+              "売上",
+              "120",
+              "145",
+              "168",
+              "201"
+            ],
+            [
+              "利益",
+              "12",
+              "18",
+              "24",
+              "32"
+            ],
+            [
+              "利益率",
+              "10.0%",
+              "12.4%",
+              "14.3%",
+              "15.9%"
+            ]
+          ],
+          "columns": [
+            {
+              "weight": 2.0,
+              "align": "l"
+            },
+            {
+              "weight": 1.0,
+              "align": "r"
+            },
+            {
+              "weight": 1.0,
+              "align": "r"
+            },
+            {
+              "weight": 1.0,
+              "align": "r"
+            },
+            {
+              "weight": 1.0,
+              "align": "r"
+            }
+          ],
+          "column_weights": null,
+          "header": true,
+          "alt_row_bg": true,
+          "header_fill": "primary",
+          "header_text_color": "white",
+          "body_text_color": "text_dark",
+          "alt_row_fill": "primary_bg",
+          "border_color": "border",
+          "font_size_pt": 10
+        }
+      ]
+    }
+  },
+  {
+    "id": "col_span_header",
+    "figure_type": "table",
+    "title": "グルーピングヘッダのテーブル",
+    "prompt": "セグメント別業績で、最上行に '2024年度通期業績' を 4 列まとめたい",
+    "notes": "col_span でヘッダ統合。負値セルを amber でハイライト。",
+    "image": "/samples/table/col_span_header.png",
+    "spec": {
+      "slide_index": 1,
+      "shapes": [
+        {
+          "kind": "table",
+          "name": "span_table",
+          "x": 765760,
+          "y": 1937360,
+          "w": 7612480,
+          "h": 2434640,
+          "rows": [
+            [
+              {
+                "text": "2024 年度通期業績",
+                "bold": null,
+                "align": "ctr",
+                "fill": null,
+                "text_color": null,
+                "col_span": 4,
+                "row_span": 1
+              },
+              "",
+              "",
+              ""
+            ],
+            [
+              "事業セグメント",
+              "売上",
+              "利益",
+              "成長率"
+            ],
+            [
+              "コア事業",
+              "1,200",
+              {
+                "text": "180",
+                "bold": true,
+                "align": null,
+                "fill": null,
+                "text_color": null,
+                "col_span": 1,
+                "row_span": 1
+              },
+              "+8%"
+            ],
+            [
+              "新規事業",
+              "320",
+              {
+                "text": "-15",
+                "bold": true,
+                "align": null,
+                "fill": null,
+                "text_color": "amber",
+                "col_span": 1,
+                "row_span": 1
+              },
+              "+45%"
+            ],
+            [
+              "保守事業",
+              "450",
+              "62",
+              "-2%"
+            ]
+          ],
+          "columns": null,
+          "column_weights": null,
+          "header": true,
+          "alt_row_bg": false,
+          "header_fill": "primary",
+          "header_text_color": "white",
+          "body_text_color": "text_dark",
+          "alt_row_fill": "primary_bg",
+          "border_color": "border",
+          "font_size_pt": 10
+        }
+      ]
+    }
+  },
+  {
+    "id": "row_span_categories",
+    "figure_type": "table",
+    "title": "カテゴリ縦結合のテーブル",
+    "prompt": "顧客獲得/維持カテゴリごとに複数施策をまとめた表。カテゴリは縦結合",
+    "notes": "row_span でカテゴリセルを縦結合。",
+    "image": "/samples/table/row_span_categories.png",
+    "spec": {
+      "slide_index": 1,
+      "shapes": [
+        {
+          "kind": "table",
+          "name": "rowspan_table",
+          "x": 965760,
+          "y": 1937360,
+          "w": 7212480,
+          "h": 2434640,
+          "rows": [
+            [
+              "カテゴリ",
+              "施策",
+              "効果"
+            ],
+            [
+              {
+                "text": "顧客獲得",
+                "bold": true,
+                "align": "ctr",
+                "fill": null,
+                "text_color": null,
+                "col_span": 1,
+                "row_span": 2
+              },
+              "オンボーディング改善",
+              "+12% CVR"
+            ],
+            [
+              "",
+              "リファラル制度導入",
+              "+8% MAU"
+            ],
+            [
+              {
+                "text": "顧客維持",
+                "bold": true,
+                "align": "ctr",
+                "fill": null,
+                "text_color": null,
+                "col_span": 1,
+                "row_span": 2
+              },
+              "サポート即応化",
+              "-15% 解約率"
+            ],
+            [
+              "",
+              "パーソナライゼーション",
+              "+18% NPS"
+            ]
+          ],
+          "columns": null,
+          "column_weights": null,
+          "header": true,
+          "alt_row_bg": true,
+          "header_fill": "primary",
+          "header_text_color": "white",
+          "body_text_color": "text_dark",
+          "alt_row_fill": "primary_bg",
+          "border_color": "border",
+          "font_size_pt": 10
+        }
+      ]
+    }
+  }
+]

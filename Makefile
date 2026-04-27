@@ -1,4 +1,4 @@
-.PHONY: help install install-api install-render install-infra install-web lint test test-unit test-integration synth diff deploy-pipeline build-render render-image clean
+.PHONY: help install install-api install-render install-infra install-web lint test test-unit test-integration synth diff deploy-pipeline build-render render-image samples clean
 
 help:
 	@echo "SlideForge Makefile"
@@ -61,6 +61,12 @@ deploy-pipeline:
 
 build-render:
 	docker build -t slideforge/render:local app/render
+
+samples:
+	# Regenerate the /samples gallery PNGs and manifest.json under
+	# app/web/public/samples/. Requires LibreOffice (soffice) and
+	# poppler-utils (pdftoppm) on PATH.
+	python -m scripts.generate_samples
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +
