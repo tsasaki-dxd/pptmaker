@@ -8,6 +8,9 @@ from pydantic import ValidationError
 from render.layout_spec import (
     BarChartShape,
     BarItem,
+    BarSeries,
+    CellSpec,
+    ColumnSpec,
     LayoutSpec,
     LineChartShape,
     LineSeries,
@@ -230,8 +233,10 @@ def test_bar_chart_negative_value_clamped_not_rejected() -> None:
         items=[BarItem(label="A", value=-5), BarItem(label="B", value=10)],
     )
     xml = emit_shape(s, 50)
-    # Both bars still emit; the negative one renders at min height.
-    assert xml.count("name=\"bar_chart_bar") == 2
+    # Both bars still emit (one per category); the negative one
+    # renders at min height.
+    assert xml.count('name="bar_chart_c0_s0"') == 1
+    assert xml.count('name="bar_chart_c1_s0"') == 1
 
 
 # ---- Line chart --------------------------------------------------------
@@ -286,3 +291,210 @@ def test_pie_chart_rejects_non_positive_slice_value() -> None:
         PieSlice(label="A", value=0)
     with pytest.raises(ValidationError):
         PieSlice(label="A", value=-1)
+
+
+# ---- Table cell / column / span ---------------------------------------
+
+
+def test_table_cell_spec_overrides_styling() -> None:
+    s = TableShape(
+        x=0, y=0, w=4_000_000, h=2_000_000,
+        rows=[
+            ["項目", "数値"],
+            ["A", CellSpec(text="999", bold=True, align="r", text_color="amber")],
+        ],
+    )
+    xml = emit_shape(s, 1)
+    # Header cell: bold body, default header fill.
+    assert "999" in xml
+    # The amber color shows up on the overridden cell.
+    assert DEFAULT_PALETTE.amber in xml
+    # Right alignment came through.
+    assert 'algn="r"' in xml
+
+
+def test_table_cell_fill_override_paints_alternate_background() -> None:
+    s = TableShape(
+        x=0, y=0, w=2_000_000, h=1_000_000,
+        rows=[
+            ["h1", "h2"],
+            [CellSpec(text="hot", fill="amber"), "ok"],
+        ],
+        header=True,
+        alt_row_bg=False,
+    )
+    xml = emit_shape(s, 1)
+    assert DEFAULT_PALETTE.amber in xml
+
+
+def test_table_columns_take_precedence_over_column_weights() -> None:
+    s = TableShape(
+        x=0, y=0, w=600_000, h=300_000,
+        rows=[["a", "b", "c"]],
+        columns=[
+            ColumnSpec(weight=1, align="l"),
+            ColumnSpec(weight=4, align="ctr"),
+            ColumnSpec(weight=1, align="r"),
+        ],
+        column_weights=[1, 1, 1],  # should be ignored
+        header=False,
+    )
+    xml = emit_shape(s, 1)
+    import re
+
+    widths = [int(m) for m in re.findall(r'<a:gridCol w="(\d+)"', xml)]
+    # Middle column ~4x outer ones (allow 1 EMU rounding drift).
+    assert widths[1] >= widths[0] * 3
+    assert sum(widths) == 600_000
+    # The 'r' alignment from the third column shows up in body cells.
+    assert 'algn="r"' in xml
+
+
+def test_table_col_span_emits_grid_span_and_hmerge() -> None:
+    s = TableShape(
+        x=0, y=0, w=900_000, h=300_000,
+        rows=[
+            [CellSpec(text="merged header", col_span=3), "", ""],
+            ["a", "b", "c"],
+        ],
+        header=True,
+    )
+    xml = emit_shape(s, 1)
+    assert 'gridSpan="3"' in xml
+    # Two continuation cells covered by the span.
+    assert xml.count('hMerge="1"') == 2
+
+
+def test_table_row_span_emits_row_span_and_vmerge() -> None:
+    s = TableShape(
+        x=0, y=0, w=600_000, h=900_000,
+        rows=[
+            [CellSpec(text="L", row_span=2), "header2"],
+            ["", "row2-b"],
+            ["row3-a", "row3-b"],
+        ],
+        header=False,
+    )
+    xml = emit_shape(s, 1)
+    assert 'rowSpan="2"' in xml
+    assert xml.count('vMerge="1"') == 1
+
+
+def test_table_span_clamped_when_oversized() -> None:
+    # row_span/col_span beyond grid bounds should not crash.
+    s = TableShape(
+        x=0, y=0, w=400_000, h=200_000,
+        rows=[[CellSpec(text="huge", col_span=99, row_span=99)]],
+        header=False,
+    )
+    xml = emit_shape(s, 1)
+    # Single cell, no merge attrs needed.
+    assert "<a:tbl>" in xml
+
+
+# ---- Bar chart multi-series + modes -----------------------------------
+
+
+def test_bar_chart_multi_series_grouped_emits_one_bar_per_series_per_category() -> None:
+    s = BarChartShape(
+        x=0, y=0, w=4_000_000, h=2_000_000,
+        series=[
+            BarSeries(name="2024", values=[10, 20, 30]),
+            BarSeries(name="2025", values=[15, 25, 5]),
+        ],
+        categories=["Q1", "Q2", "Q3"],
+        mode="grouped",
+    )
+    xml = emit_shape(s, 50)
+    # 3 categories * 2 series = 6 bars, plus 1 axis = 7 sp; values + cat
+    # labels on top.
+    assert xml.count('name="bar_chart_c0_s0"') == 1
+    assert xml.count('name="bar_chart_c2_s1"') == 1
+    # Different default series colors used.
+    assert DEFAULT_PALETTE.purple in xml
+    assert DEFAULT_PALETTE.amber in xml
+
+
+def test_bar_chart_stacked_segments_share_x_position() -> None:
+    s = BarChartShape(
+        x=0, y=0, w=2_000_000, h=2_000_000,
+        series=[
+            BarSeries(name="A", values=[10, 20]),
+            BarSeries(name="B", values=[30, 10]),
+        ],
+        categories=["Q1", "Q2"],
+        mode="stacked",
+        show_values=False,
+    )
+    xml = emit_shape(s, 50)
+    # 2 cats * 2 series = 4 segments + 1 axis + 2 cat labels = 7 sp.
+    assert xml.count('name="bar_chart_c') == 4 + 0  # only segments named c%d_s%d
+    assert xml.count('name="bar_chart_c0_s') == 2
+    assert xml.count('name="bar_chart_c1_s') == 2
+
+
+def test_bar_chart_stacked100_normalizes_to_full_height() -> None:
+    s = BarChartShape(
+        x=0, y=0, w=2_000_000, h=2_000_000,
+        series=[
+            BarSeries(name="A", values=[1, 2]),
+            BarSeries(name="B", values=[3, 8]),  # cat 0 sum = 4, cat 1 sum = 10
+        ],
+        categories=["Q1", "Q2"],
+        mode="stacked100",
+        show_values=False,
+    )
+    xml = emit_shape(s, 50)
+    # Should still produce 4 segments. Heights normalized so each
+    # category sums to the same total height (within rounding).
+    assert xml.count('name="bar_chart_c0_s') == 2
+    assert xml.count('name="bar_chart_c1_s') == 2
+
+
+def test_bar_chart_rejects_items_and_series_together() -> None:
+    with pytest.raises(ValidationError):
+        BarChartShape(
+            x=0, y=0, w=100, h=100,
+            items=[BarItem(label="A", value=1)],
+            series=[BarSeries(name="x", values=[1])],
+            categories=["A"],
+        )
+
+
+def test_bar_chart_requires_categories_when_series_used() -> None:
+    with pytest.raises(ValidationError):
+        BarChartShape(
+            x=0, y=0, w=100, h=100,
+            series=[BarSeries(name="x", values=[1, 2])],
+        )
+
+
+def test_bar_chart_series_values_must_match_categories_length() -> None:
+    with pytest.raises(ValidationError):
+        BarChartShape(
+            x=0, y=0, w=100, h=100,
+            series=[BarSeries(name="x", values=[1, 2, 3])],
+            categories=["A", "B"],
+        )
+
+
+def test_bar_chart_requires_at_least_one_input() -> None:
+    with pytest.raises(ValidationError):
+        BarChartShape(x=0, y=0, w=100, h=100)
+
+
+def test_bar_chart_horizontal_stacked_works() -> None:
+    s = BarChartShape(
+        x=0, y=0, w=4_000_000, h=2_000_000,
+        series=[
+            BarSeries(name="A", values=[5, 10]),
+            BarSeries(name="B", values=[3, 7]),
+        ],
+        categories=["Q1", "Q2"],
+        mode="stacked",
+        orientation="h",
+        show_values=False,
+    )
+    xml = emit_shape(s, 50)
+    assert xml.count('name="bar_chart_c0_s') == 2
+    assert xml.count('name="bar_chart_c1_s') == 2
