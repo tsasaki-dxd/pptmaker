@@ -35,11 +35,15 @@ from .shapes import (
     Palette,
     TextParagraph,
     TextRun,
+    bar_chart_shape,
+    line_chart_shape,
+    pie_chart_shape,
     pill_label,
     rect_outline,
     rect_shape,
     resolve_palette_color,
     round_rect_shape,
+    table_shape,
     text_box_paragraphs,
 )
 
@@ -125,8 +129,118 @@ class LineShape(_Base):
     color: str = "border"
 
 
+# ---- Table / Chart specs -----------------------------------------------
+#
+# These are composite primitives — the LLM emits structured data
+# (rows, bars, slices) and the deterministic emitter expands it into
+# multiple OOXML shapes. The LLM never has to compute bar widths or
+# pie angles itself.
+
+
+class TableShape(_Base):
+    """Tabular data. ``rows[0]`` is treated as the header row when
+    ``header`` is true. Cells are plain strings; for richer styling
+    use multiple TextShapes side by side instead.
+    """
+
+    kind: Literal["table"] = "table"
+    name: str = "table"
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    w: int = Field(gt=0)
+    h: int = Field(gt=0)
+    rows: list[list[str]] = Field(min_length=1)
+    column_weights: list[float] | None = None
+    header: bool = True
+    alt_row_bg: bool = False
+    header_fill: str = "primary"
+    header_text_color: str = "white"
+    body_text_color: str = "text_dark"
+    alt_row_fill: str = "primary_bg"
+    border_color: str = "border"
+    font_size_pt: int = Field(default=10, ge=6, le=24)
+
+
+class BarItem(_Base):
+    label: str
+    value: float
+    color: str | None = None
+
+
+class BarChartShape(_Base):
+    """Vertical or horizontal bar chart. Single-series; for multi-
+    series use multiple BarChartShapes side by side or wait for a
+    grouped/stacked variant.
+    """
+
+    kind: Literal["bar_chart"] = "bar_chart"
+    name: str = "bar_chart"
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    w: int = Field(gt=0)
+    h: int = Field(gt=0)
+    items: list[BarItem] = Field(min_length=1)
+    orientation: Literal["v", "h"] = "v"
+    show_values: bool = True
+    value_format: str = "{:g}"
+    bar_color: str = "primary"
+    axis_color: str = "border"
+    label_color: str = "muted"
+    value_color: str = "text_dark"
+    font_size_pt: int = Field(default=10, ge=6, le=24)
+
+
+class LineSeries(_Base):
+    name: str = ""
+    values: list[float] = Field(min_length=2)
+    color: str | None = None
+
+
+class LineChartShape(_Base):
+    """Multi-series line chart sharing one x axis."""
+
+    kind: Literal["line_chart"] = "line_chart"
+    name: str = "line_chart"
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    w: int = Field(gt=0)
+    h: int = Field(gt=0)
+    series: list[LineSeries] = Field(min_length=1)
+    x_labels: list[str] | None = None
+    show_markers: bool = True
+    axis_color: str = "border"
+    label_color: str = "muted"
+    line_width_emu: int = Field(default=19050, ge=1)
+    marker_radius_emu: int = Field(default=38100, ge=1)
+    font_size_pt: int = Field(default=9, ge=6, le=24)
+
+
+class PieSlice(_Base):
+    label: str = ""
+    value: float = Field(gt=0)
+    color: str | None = None
+
+
+class PieChartShape(_Base):
+    """Pie chart using OOXML pie preset geometry. Labels are *not*
+    drawn inside the pie; place TextShapes / PillShapes around it
+    if labelling is needed.
+    """
+
+    kind: Literal["pie_chart"] = "pie_chart"
+    name: str = "pie_chart"
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    w: int = Field(gt=0)
+    h: int = Field(gt=0)
+    slices: list[PieSlice] = Field(min_length=1)
+
+
 Shape = Annotated[
-    RectShape | TextShape | PillShape | LineShape,
+    (
+        RectShape | TextShape | PillShape | LineShape
+        | TableShape | BarChartShape | LineChartShape | PieChartShape
+    ),
     Field(discriminator="kind"),
 ]
 
@@ -258,6 +372,99 @@ def emit_shape(
             shape.w,
             shape.h,
             resolve_palette_color(shape.color, palette),
+        )
+
+    if isinstance(shape, TableShape):
+        return table_shape(
+            sp_id,
+            shape.name,
+            shape.x,
+            shape.y,
+            shape.w,
+            shape.h,
+            rows=[[c for c in row] for row in shape.rows],
+            column_weights=shape.column_weights,
+            header=shape.header,
+            alt_row_bg=shape.alt_row_bg,
+            header_fill=resolve_palette_color(shape.header_fill, palette),
+            header_text_color=resolve_palette_color(shape.header_text_color, palette),
+            body_text_color=resolve_palette_color(shape.body_text_color, palette),
+            alt_row_fill=resolve_palette_color(shape.alt_row_fill, palette),
+            border_color=resolve_palette_color(shape.border_color, palette),
+            font_size_pt=shape.font_size_pt,
+            font=font,
+        )
+
+    if isinstance(shape, BarChartShape):
+        return bar_chart_shape(
+            sp_id,
+            shape.name,
+            shape.x,
+            shape.y,
+            shape.w,
+            shape.h,
+            items=[
+                (
+                    item.label,
+                    item.value,
+                    resolve_palette_color(item.color, palette) if item.color else None,
+                )
+                for item in shape.items
+            ],
+            orientation=shape.orientation,
+            show_values=shape.show_values,
+            value_format=shape.value_format,
+            bar_color=resolve_palette_color(shape.bar_color, palette),
+            axis_color=resolve_palette_color(shape.axis_color, palette),
+            label_color=resolve_palette_color(shape.label_color, palette),
+            value_color=resolve_palette_color(shape.value_color, palette),
+            font_size_pt=shape.font_size_pt,
+            font=font,
+        )
+
+    if isinstance(shape, LineChartShape):
+        return line_chart_shape(
+            sp_id,
+            shape.name,
+            shape.x,
+            shape.y,
+            shape.w,
+            shape.h,
+            series=[
+                (
+                    s.name,
+                    list(s.values),
+                    resolve_palette_color(s.color, palette) if s.color else None,
+                )
+                for s in shape.series
+            ],
+            x_labels=list(shape.x_labels) if shape.x_labels else None,
+            show_markers=shape.show_markers,
+            axis_color=resolve_palette_color(shape.axis_color, palette),
+            label_color=resolve_palette_color(shape.label_color, palette),
+            line_width_emu=shape.line_width_emu,
+            marker_radius_emu=shape.marker_radius_emu,
+            font_size_pt=shape.font_size_pt,
+            font=font,
+        )
+
+    if isinstance(shape, PieChartShape):
+        return pie_chart_shape(
+            sp_id,
+            shape.name,
+            shape.x,
+            shape.y,
+            shape.w,
+            shape.h,
+            slices=[
+                (
+                    sl.label,
+                    sl.value,
+                    resolve_palette_color(sl.color, palette) if sl.color else None,
+                )
+                for sl in shape.slices
+            ],
+            palette=palette,
         )
 
     raise ValueError(f"unknown shape kind: {shape!r}")
