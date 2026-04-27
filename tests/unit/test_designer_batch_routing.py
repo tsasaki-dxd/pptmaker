@@ -23,11 +23,14 @@ class _SentinelLLM:
     def create(self, **_: Any) -> Any:
         self.create_calls += 1
         # Return a minimally-valid LayoutSpec so validation passes.
+        # Coordinates must sit inside the dxdesignsystem template's
+        # content body_box (~ x=365760..8778240, y=1737360..4572000)
+        # or the bounds-validation retry will reject the spec.
         class _Block:
             type = "text"
             text = (
                 '{"slide_index": 1, "shapes": [{"kind":"rect","name":"x",'
-                '"x":1,"y":1,"w":1,"h":1,"fill":"primary"}]}'
+                '"x":400000,"y":2000000,"w":1000,"h":1000,"fill":"primary"}]}'
             )
 
         class _Resp:

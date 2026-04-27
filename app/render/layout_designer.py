@@ -69,11 +69,43 @@ JSON Schema に従って LayoutSpec として返してください。
    "text":"...","fill":"<HEX/token>","text_color":"<HEX/token>","size_pt":int}}
 - {{"kind":"line","name":"...","x":int,"y":int,"w":int,"h":int(1〜),
    "color":"<HEX/token>"}}
+- {{"kind":"table","name":"...","x":int,"y":int,"w":int,"h":int,
+   "rows":[["セル","セル",...], ...],
+   // セルは文字列、または以下の CellSpec (混在可)
+   //   {{"text":"...","bold":bool|null,"align":"l|ctr|r"|null,
+   //     "fill":"<HEX/token>"|null,"text_color":"<HEX/token>"|null,
+   //     "col_span":int>=1,"row_span":int>=1}}
+   // span を指定したセルが覆う位置にも空セル/CellSpec をそのまま並べてよい
+   // (中身は破棄される)。
+   "columns":[{{"weight":1.0,"align":"l|ctr|r"}}, ...]|null,
+   "column_weights":[1,2,1]|null,  // 簡易版 (columns 未指定時のフォールバック)
+   "header":true,"alt_row_bg":false,
+   "header_fill":"primary","header_text_color":"white",
+   "body_text_color":"text_dark","alt_row_fill":"primary_bg",
+   "border_color":"border","font_size_pt":10}}
+- {{"kind":"bar_chart","name":"...","x":int,"y":int,"w":int,"h":int,
+   // 単系列: items を使う
+   "items":[{{"label":"...","value":数値,"color":"<token>"|null}}, ...]|null,
+   // 多系列: series + categories を使う (items とは排他)
+   "series":[{{"name":"...","values":[v1,v2,...],"color":"<token>"|null}}, ...]|null,
+   "categories":["A","B",...]|null,
+   "mode":"grouped"|"stacked"|"stacked100",  // 多系列時のレイアウト
+   "orientation":"v"|"h","show_values":true,"value_format":"{{:g}}",
+   "bar_color":"primary","axis_color":"border","label_color":"muted",
+   "value_color":"text_dark","font_size_pt":10}}
+- {{"kind":"line_chart","name":"...","x":int,"y":int,"w":int,"h":int,
+   "series":[{{"name":"...","values":[v1,v2,...],"color":"<token>"|null}}, ...],
+   "x_labels":["Q1","Q2",...]|null,"show_markers":true,
+   "axis_color":"border","label_color":"muted","font_size_pt":9}}
+- {{"kind":"pie_chart","name":"...","x":int,"y":int,"w":int,"h":int,
+   "slices":[{{"label":"...","value":正数,"color":"<token>"|null}}, ...]}}
+  ※ pie のラベルは内部に描画されない。必要なら周囲に text/pill を別途配置。
 
 【palette token】
 HEX 6 桁の代わりに以下のセマンティック名が使えます:
-  primary / primary_dark / primary_lt / muted / border / bg_alt /
-  text_dark / amber / green / black / white
+  primary / primary_dark / primary_lt / primary_bg /
+  muted / border / bg_alt / text_dark / text_muted / accent /
+  amber / green / black / white
 
 【設計指針】
 - タイトルや subtitle / 側面ラベルなどテンプレ固定要素には触らない。
@@ -83,7 +115,12 @@ HEX 6 桁の代わりに以下のセマンティック名が使えます:
   * 比較 / before-after → 2 カラム（背景色を変える / アクセント色で差別化）
   * 工程 / 段階 → 矢印つき横配列、または縦の番号付き
   * 数値強調 → 大きな数字 + ラベル + 補足
-  * 表形式 → 行交互背景 + 列ヘッダ + 整列
+  * 表形式データ → table プリミティブ（columns で列幅・整列、CellSpec で
+    強調セル / col_span / row_span を表現可能）
+  * カテゴリ別の量比較 → bar_chart（単系列は items、多系列は series + categories
+    + mode で grouped/stacked/stacked100）
+  * 時系列の推移 → line_chart（series で複数本、x_labels で軸ラベル）
+  * 構成比 → pie_chart（slices）。ラベルは内部に出ないので必要なら周囲に pill
 - 余白を取る（ラベルと値、カードとカード間）。
 - フォントサイズは情報階層を反映: タイトル 14-18pt, ラベル 9-11pt, 本文 10-12pt, 注記 8-9pt。
 - 色は palette token を優先（HEX 直書きは特別な強調色のみ）。
@@ -132,6 +169,36 @@ def slide_to_designer_dict(slide: dict[str, Any]) -> dict[str, Any]:
         "headline_message": slide.get("headline_message"),
         "content": slide.get("content", {}),
     }
+
+
+def _bounds_violations(
+    spec: LayoutSpec, body_rect: tuple[int, int, int, int]
+) -> list[str]:
+    """Return human-readable strings for every shape that lies outside
+    the body container. Empty list = clean.
+
+    The Pydantic schema only enforces non-negative coords, not the
+    body_rect bound, so we check it here and feed any violation back
+    into the retry loop so the LLM can correct itself.
+    """
+    bx, by, bw, bh = body_rect
+    bx_max = bx + bw
+    by_max = by + bh
+    out: list[str] = []
+    for shape in spec.shapes:
+        x = getattr(shape, "x", None)
+        y = getattr(shape, "y", None)
+        w = getattr(shape, "w", None)
+        h = getattr(shape, "h", None)
+        if x is None or y is None or w is None or h is None:
+            continue
+        if x < bx or y < by or x + w > bx_max or y + h > by_max:
+            out.append(
+                f"shape '{getattr(shape, 'name', shape.kind)}' (kind={shape.kind}) "
+                f"at x={x},y={y},w={w},h={h} は body_area "
+                f"x={bx}..{bx_max}, y={by}..{by_max} を逸脱"
+            )
+    return out
 
 
 def design_layout(
@@ -183,7 +250,21 @@ def design_layout(
                 b.text for b in resp.content if getattr(b, "type", None) == "text"
             )
             data = _extract_json(text)
-            return LayoutSpec.model_validate(data)
+            spec = LayoutSpec.model_validate(data)
+            violations = _bounds_violations(spec, body_rect)
+            if violations:
+                # Treat as a retryable validation error so the LLM gets
+                # the offending shape list and a chance to fix.
+                last_error = (
+                    "body_area 越境: " + "; ".join(violations[:5])
+                )[:600]
+                log.warning(
+                    "layout designer bounds violation (attempt %d): %s",
+                    attempt + 1,
+                    last_error,
+                )
+                continue
+            return spec
         except ValidationError as e:
             last_error = str(e)[:600]
             log.warning(

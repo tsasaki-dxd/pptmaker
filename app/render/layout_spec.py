@@ -35,11 +35,15 @@ from .shapes import (
     Palette,
     TextParagraph,
     TextRun,
+    bar_chart_shape,
+    line_chart_shape,
+    pie_chart_shape,
     pill_label,
     rect_outline,
     rect_shape,
     resolve_palette_color,
     round_rect_shape,
+    table_shape,
     text_box_paragraphs,
 )
 
@@ -125,8 +129,192 @@ class LineShape(_Base):
     color: str = "border"
 
 
+# ---- Table / Chart specs -----------------------------------------------
+#
+# These are composite primitives — the LLM emits structured data
+# (rows, bars, slices) and the deterministic emitter expands it into
+# multiple OOXML shapes. The LLM never has to compute bar widths or
+# pie angles itself.
+
+
+class CellSpec(_Base):
+    """Per-cell override. Any field set to None inherits the row /
+    header default. ``col_span`` / ``row_span`` cover adjacent cells —
+    the renderer emits OOXML ``gridSpan``/``rowSpan`` plus
+    ``hMerge``/``vMerge`` continuation cells; the cells the span
+    covers should still appear in ``rows`` (their content is dropped).
+    """
+
+    text: str = ""
+    bold: bool | None = None
+    align: Literal["l", "ctr", "r"] | None = None
+    fill: str | None = None
+    text_color: str | None = None
+    col_span: int = Field(default=1, ge=1)
+    row_span: int = Field(default=1, ge=1)
+
+
+class ColumnSpec(_Base):
+    """Per-column override. ``weight`` controls relative width
+    (defaults to 1 — equal split); ``align`` is the default text
+    alignment for body cells in this column (header keeps its own
+    style)."""
+
+    weight: float = Field(default=1.0, gt=0)
+    align: Literal["l", "ctr", "r"] = "l"
+
+
+class TableShape(_Base):
+    """Tabular data.
+
+    ``rows`` may contain plain strings (simple cells) or ``CellSpec``
+    dicts for richer per-cell styling and spans. ``rows[0]`` is the
+    header row when ``header`` is true.
+
+    Column behavior is controlled by ``columns`` (preferred) or the
+    legacy ``column_weights`` shorthand. If both are supplied,
+    ``columns`` wins. If neither is supplied, columns are equal-width
+    and left-aligned.
+    """
+
+    kind: Literal["table"] = "table"
+    name: str = "table"
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    w: int = Field(gt=0)
+    h: int = Field(gt=0)
+    rows: list[list[str | CellSpec]] = Field(min_length=1)
+    columns: list[ColumnSpec] | None = None
+    column_weights: list[float] | None = None
+    header: bool = True
+    alt_row_bg: bool = False
+    header_fill: str = "primary"
+    header_text_color: str = "white"
+    body_text_color: str = "text_dark"
+    alt_row_fill: str = "primary_bg"
+    border_color: str = "border"
+    font_size_pt: int = Field(default=10, ge=6, le=24)
+
+
+class BarItem(_Base):
+    label: str
+    value: float
+    color: str | None = None
+
+
+class BarSeries(_Base):
+    """One series of a multi-series bar chart. ``values`` must align
+    with the chart's ``categories`` 1:1."""
+
+    name: str = ""
+    values: list[float] = Field(min_length=1)
+    color: str | None = None
+
+
+class BarChartShape(_Base):
+    """Vertical or horizontal bar chart.
+
+    Two input modes:
+
+    1. Single-series (shorthand): pass ``items`` only. Each item
+       becomes one bar; per-item ``color`` overrides ``bar_color``.
+
+    2. Multi-series: pass ``series`` + ``categories``. Each series'
+       ``values`` must match ``len(categories)``. ``mode`` selects
+       layout: ``"grouped"`` (clustered side-by-side), ``"stacked"``
+       (cumulative segments), or ``"stacked100"`` (each category
+       normalized to 100%).
+
+    ``items`` and ``series`` are mutually exclusive.
+    """
+
+    kind: Literal["bar_chart"] = "bar_chart"
+    name: str = "bar_chart"
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    w: int = Field(gt=0)
+    h: int = Field(gt=0)
+    items: list[BarItem] | None = None
+    series: list[BarSeries] | None = None
+    categories: list[str] | None = None
+    mode: Literal["grouped", "stacked", "stacked100"] = "grouped"
+    orientation: Literal["v", "h"] = "v"
+    show_values: bool = True
+    value_format: str = "{:g}"
+    bar_color: str = "primary"
+    axis_color: str = "border"
+    label_color: str = "muted"
+    value_color: str = "text_dark"
+    font_size_pt: int = Field(default=10, ge=6, le=24)
+
+    def model_post_init(self, __context: object) -> None:  # type: ignore[override]
+        if self.items is None and self.series is None:
+            raise ValueError("bar_chart requires either `items` or `series`")
+        if self.items is not None and self.series is not None:
+            raise ValueError("bar_chart accepts `items` OR `series`, not both")
+        if self.series is not None:
+            if not self.categories:
+                raise ValueError("multi-series bar_chart requires `categories`")
+            n_cats = len(self.categories)
+            for s in self.series:
+                if len(s.values) != n_cats:
+                    raise ValueError(
+                        f"series '{s.name}' has {len(s.values)} values "
+                        f"but categories has {n_cats}"
+                    )
+
+
+class LineSeries(_Base):
+    name: str = ""
+    values: list[float] = Field(min_length=2)
+    color: str | None = None
+
+
+class LineChartShape(_Base):
+    """Multi-series line chart sharing one x axis."""
+
+    kind: Literal["line_chart"] = "line_chart"
+    name: str = "line_chart"
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    w: int = Field(gt=0)
+    h: int = Field(gt=0)
+    series: list[LineSeries] = Field(min_length=1)
+    x_labels: list[str] | None = None
+    show_markers: bool = True
+    axis_color: str = "border"
+    label_color: str = "muted"
+    line_width_emu: int = Field(default=19050, ge=1)
+    marker_radius_emu: int = Field(default=38100, ge=1)
+    font_size_pt: int = Field(default=9, ge=6, le=24)
+
+
+class PieSlice(_Base):
+    label: str = ""
+    value: float = Field(gt=0)
+    color: str | None = None
+
+
+class PieChartShape(_Base):
+    """Pie chart using OOXML pie preset geometry. Labels are *not*
+    drawn inside the pie; place TextShapes / PillShapes around it
+    if labelling is needed.
+    """
+
+    kind: Literal["pie_chart"] = "pie_chart"
+    name: str = "pie_chart"
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    w: int = Field(gt=0)
+    h: int = Field(gt=0)
+    slices: list[PieSlice] = Field(min_length=1)
+
+
 Shape = Annotated[
-    RectShape | TextShape | PillShape | LineShape,
+    (
+        RectShape | TextShape | PillShape | LineShape
+        | TableShape | BarChartShape | LineChartShape | PieChartShape
+    ),
     Field(discriminator="kind"),
 ]
 
@@ -258,6 +446,170 @@ def emit_shape(
             shape.w,
             shape.h,
             resolve_palette_color(shape.color, palette),
+        )
+
+    if isinstance(shape, TableShape):
+        # Translate CellSpec / ColumnSpec into a renderer-friendly
+        # form. Plain string cells become a CellSpec stub here so the
+        # emitter has a single shape to work with.
+        rows_for_emit: list[list[dict[str, object]]] = []
+        for row in shape.rows:
+            row_out: list[dict[str, object]] = []
+            for cell in row:
+                if isinstance(cell, CellSpec):
+                    row_out.append(
+                        {
+                            "text": cell.text,
+                            "bold": cell.bold,
+                            "align": cell.align,
+                            "fill": (
+                                resolve_palette_color(cell.fill, palette)
+                                if cell.fill
+                                else None
+                            ),
+                            "text_color": (
+                                resolve_palette_color(cell.text_color, palette)
+                                if cell.text_color
+                                else None
+                            ),
+                            "col_span": cell.col_span,
+                            "row_span": cell.row_span,
+                        }
+                    )
+                else:
+                    row_out.append(
+                        {
+                            "text": cell,
+                            "bold": None,
+                            "align": None,
+                            "fill": None,
+                            "text_color": None,
+                            "col_span": 1,
+                            "row_span": 1,
+                        }
+                    )
+            rows_for_emit.append(row_out)
+
+        if shape.columns:
+            columns_for_emit = [
+                {"weight": c.weight, "align": c.align} for c in shape.columns
+            ]
+        elif shape.column_weights:
+            columns_for_emit = [
+                {"weight": w, "align": "l"} for w in shape.column_weights
+            ]
+        else:
+            columns_for_emit = None
+
+        return table_shape(
+            sp_id,
+            shape.name,
+            shape.x,
+            shape.y,
+            shape.w,
+            shape.h,
+            rows=rows_for_emit,
+            columns=columns_for_emit,
+            header=shape.header,
+            alt_row_bg=shape.alt_row_bg,
+            header_fill=resolve_palette_color(shape.header_fill, palette),
+            header_text_color=resolve_palette_color(shape.header_text_color, palette),
+            body_text_color=resolve_palette_color(shape.body_text_color, palette),
+            alt_row_fill=resolve_palette_color(shape.alt_row_fill, palette),
+            border_color=resolve_palette_color(shape.border_color, palette),
+            font_size_pt=shape.font_size_pt,
+            font=font,
+        )
+
+    if isinstance(shape, BarChartShape):
+        if shape.items is not None:
+            items_for_emit = [
+                (
+                    item.label,
+                    item.value,
+                    resolve_palette_color(item.color, palette) if item.color else None,
+                )
+                for item in shape.items
+            ]
+            series_for_emit = None
+            categories_for_emit = None
+        else:
+            assert shape.series is not None and shape.categories is not None
+            items_for_emit = None
+            series_for_emit = [
+                (
+                    s.name,
+                    list(s.values),
+                    resolve_palette_color(s.color, palette) if s.color else None,
+                )
+                for s in shape.series
+            ]
+            categories_for_emit = list(shape.categories)
+        return bar_chart_shape(
+            sp_id,
+            shape.name,
+            shape.x,
+            shape.y,
+            shape.w,
+            shape.h,
+            items=items_for_emit,
+            series=series_for_emit,
+            categories=categories_for_emit,
+            mode=shape.mode,
+            orientation=shape.orientation,
+            show_values=shape.show_values,
+            value_format=shape.value_format,
+            bar_color=resolve_palette_color(shape.bar_color, palette),
+            axis_color=resolve_palette_color(shape.axis_color, palette),
+            label_color=resolve_palette_color(shape.label_color, palette),
+            value_color=resolve_palette_color(shape.value_color, palette),
+            font_size_pt=shape.font_size_pt,
+            font=font,
+        )
+
+    if isinstance(shape, LineChartShape):
+        return line_chart_shape(
+            sp_id,
+            shape.name,
+            shape.x,
+            shape.y,
+            shape.w,
+            shape.h,
+            series=[
+                (
+                    s.name,
+                    list(s.values),
+                    resolve_palette_color(s.color, palette) if s.color else None,
+                )
+                for s in shape.series
+            ],
+            x_labels=list(shape.x_labels) if shape.x_labels else None,
+            show_markers=shape.show_markers,
+            axis_color=resolve_palette_color(shape.axis_color, palette),
+            label_color=resolve_palette_color(shape.label_color, palette),
+            line_width_emu=shape.line_width_emu,
+            marker_radius_emu=shape.marker_radius_emu,
+            font_size_pt=shape.font_size_pt,
+            font=font,
+        )
+
+    if isinstance(shape, PieChartShape):
+        return pie_chart_shape(
+            sp_id,
+            shape.name,
+            shape.x,
+            shape.y,
+            shape.w,
+            shape.h,
+            slices=[
+                (
+                    sl.label,
+                    sl.value,
+                    resolve_palette_color(sl.color, palette) if sl.color else None,
+                )
+                for sl in shape.slices
+            ],
+            palette=palette,
         )
 
     raise ValueError(f"unknown shape kind: {shape!r}")

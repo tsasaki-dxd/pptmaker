@@ -331,6 +331,28 @@ def round_rect_shape(
     )
 
 
+# Aliases the layout-designer LLM is taught to emit but which don't
+# match Palette field names 1:1. Mapped here so old prompts and new
+# theme-agnostic vocab both resolve sensibly.
+_PALETTE_ALIASES: Final[dict[str, str]] = {
+    "primary": "purple",
+    "primary_dark": "purple_dk",
+    "primary_lt": "purple_lt",
+    "primary_bg": "purple_bg",
+    "text_dark": "black",
+    "text_muted": "muted",
+    "accent": "amber",
+}
+
+# Tokens that resolve to a fixed HEX regardless of palette (used so
+# "white" doesn't silently fall back to purple on an unknown lookup).
+_FIXED_TOKENS: Final[dict[str, str]] = {
+    "white": "FFFFFF",
+    "none": "FFFFFF",
+    "transparent": "FFFFFF",
+}
+
+
 def resolve_palette_color(token: str, palette: Palette | None = None) -> str:
     """Accept either a 6-char HEX color (returned uppercase) or a
     palette field name ("purple" / "muted" / "amber" / etc.) and
@@ -343,8 +365,12 @@ def resolve_palette_color(token: str, palette: Palette | None = None) -> str:
         return s.upper()
     if s.startswith("#") and len(s) == 7:
         return s[1:].upper()
+    key = s.lower()
+    if key in _FIXED_TOKENS:
+        return _FIXED_TOKENS[key]
+    key = _PALETTE_ALIASES.get(key, key)
     pal = palette or DEFAULT_PALETTE
-    return getattr(pal, s, pal.purple)
+    return getattr(pal, key, pal.purple)
 
 
 def _xml_escape(s: str) -> str:
@@ -575,6 +601,808 @@ def pill_label(
         f"</a:p></p:txBody>"
         f"</p:sp>"
     )
+
+
+# ---- Table / Chart primitives -------------------------------------------
+#
+# These emit composite XML (one or more <p:sp> / <p:graphicFrame> siblings)
+# in a single string. Sub-shape IDs are allocated as `sp_id * 100 + i` so
+# they never collide with the parent or sibling IDs that emit_layout_spec
+# hands out incrementally.
+
+
+def _sub_id(sp_id: int, i: int) -> int:
+    return sp_id * 100 + i
+
+
+def table_shape(
+    sp_id: int,
+    name: str,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    *,
+    rows: list[list[dict[str, object]]],
+    columns: list[dict[str, object]] | None = None,
+    header: bool = True,
+    alt_row_bg: bool = False,
+    header_fill: str = DEFAULT_PALETTE.purple,
+    header_text_color: str = "FFFFFF",
+    body_text_color: str = DEFAULT_PALETTE.black,
+    alt_row_fill: str = DEFAULT_PALETTE.purple_bg,
+    border_color: str = DEFAULT_PALETTE.border,
+    font_size_pt: int = 10,
+    font: str = DEFAULT_FONT,
+) -> str:
+    """OOXML table inside a <p:graphicFrame>.
+
+    Cells are dicts with keys ``text, bold, align, fill, text_color,
+    col_span, row_span`` (None values inherit row/header defaults).
+    Columns are dicts with ``weight`` (relative width) and ``align``
+    (default body alignment). When ``columns`` is None, columns are
+    equal-width and left-aligned.
+
+    Spans are emitted as OOXML ``gridSpan``/``rowSpan`` on the
+    originating cell with ``hMerge``/``vMerge`` continuation cells
+    on the covered positions; the covered positions in ``rows`` keep
+    their place but their content is dropped.
+    """
+    if not rows:
+        # Pydantic enforces at least one row, but be defensive.
+        return ""
+    x, y, w, h = _i(x), _i(y), _i(w), _i(h)
+    n_cols = max(len(r) for r in rows)
+    n_rows = len(rows)
+
+    if columns and len(columns) == n_cols:
+        weights = [float(c.get("weight", 1.0)) for c in columns]
+        col_aligns = [str(c.get("align", "l")) for c in columns]
+    elif columns:
+        # Length mismatch — fall back to equal but keep aligns where
+        # possible.
+        weights = [1.0] * n_cols
+        col_aligns = [
+            str(columns[i].get("align", "l")) if i < len(columns) else "l"
+            for i in range(n_cols)
+        ]
+    else:
+        weights = [1.0] * n_cols
+        col_aligns = ["l"] * n_cols
+
+    total = sum(weights) or 1.0
+    col_widths = [_i(w * weights[i] / total) for i in range(n_cols)]
+    col_widths[-1] += w - sum(col_widths)
+
+    row_h = h // n_rows
+    row_heights = [row_h] * n_rows
+    row_heights[-1] += h - row_h * n_rows
+
+    grid = "".join(f'<a:gridCol w="{cw}"/>' for cw in col_widths)
+    tbl_grid = f"<a:tblGrid>{grid}</a:tblGrid>"
+
+    # ---- Resolve span coverage: which (row, col) cells are
+    # continuations (covered by an earlier cell's span) and which
+    # axis (h/v/both) covers them.
+    #
+    # `covered[(r, c)] = "h" | "v" | "both"`
+    covered: dict[tuple[int, int], str] = {}
+    # Defensively clamp spans so a runaway LLM value can't run off
+    # the grid.
+    for ri in range(n_rows):
+        row = rows[ri] if ri < len(rows) else []
+        for ci in range(n_cols):
+            if (ri, ci) in covered:
+                continue
+            cell = row[ci] if ci < len(row) else None
+            if not isinstance(cell, dict):
+                continue
+            cs = max(1, min(int(cell.get("col_span", 1) or 1), n_cols - ci))
+            rs = max(1, min(int(cell.get("row_span", 1) or 1), n_rows - ri))
+            for dr in range(rs):
+                for dc in range(cs):
+                    if dr == 0 and dc == 0:
+                        continue
+                    axis = "both" if (dr > 0 and dc > 0) else ("h" if dc > 0 else "v")
+                    covered[(ri + dr, ci + dc)] = axis
+
+    def _cell_xml(
+        cell: dict[str, object] | None,
+        *,
+        is_header: bool,
+        is_alt: bool,
+        col_align: str,
+        cs_attr: str,
+        rs_attr: str,
+        merge_attrs: str,
+    ) -> str:
+        # Resolve effective fill / text_color / bold / align.
+        if is_header:
+            default_fill = header_fill
+            default_tcolor = header_text_color
+            default_bold = True
+        else:
+            default_fill = alt_row_fill if is_alt else "FFFFFF"
+            default_tcolor = body_text_color
+            default_bold = False
+        if cell is None:
+            text = ""
+            fill = default_fill
+            tcolor = default_tcolor
+            bold = default_bold
+            align = col_align if not is_header else "l"
+        else:
+            text = str(cell.get("text", "") or "")
+            fill_v = cell.get("fill")
+            fill = str(fill_v) if fill_v else default_fill
+            tc_v = cell.get("text_color")
+            tcolor = str(tc_v) if tc_v else default_tcolor
+            bold_v = cell.get("bold")
+            bold = bool(bold_v) if bold_v is not None else default_bold
+            align_v = cell.get("align")
+            align = str(align_v) if align_v else (col_align if not is_header else "l")
+
+        ln = (
+            f'<a:lnL w="6350"><a:solidFill><a:srgbClr val="{border_color}"/></a:solidFill></a:lnL>'
+            f'<a:lnR w="6350"><a:solidFill><a:srgbClr val="{border_color}"/></a:solidFill></a:lnR>'
+            f'<a:lnT w="6350"><a:solidFill><a:srgbClr val="{border_color}"/></a:solidFill></a:lnT>'
+            f'<a:lnB w="6350"><a:solidFill><a:srgbClr val="{border_color}"/></a:solidFill></a:lnB>'
+        )
+        body = (
+            f'<a:txBody><a:bodyPr wrap="square" anchor="ctr"/><a:lstStyle/>'
+            f'<a:p><a:pPr algn="{align}"/>'
+            f"{_run(text, font_size_pt, bold, tcolor, font)}"
+            f"</a:p></a:txBody>"
+        )
+        tcpr = (
+            f'<a:tcPr marL="36000" marR="36000" marT="18000" marB="18000">'
+            f"{ln}"
+            f'<a:solidFill><a:srgbClr val="{fill}"/></a:solidFill>'
+            f"</a:tcPr>"
+        )
+        attrs = f"{cs_attr}{rs_attr}{merge_attrs}"
+        return f"<a:tc{attrs}>{body}{tcpr}</a:tc>"
+
+    rows_xml: list[str] = []
+    for ri in range(n_rows):
+        row = rows[ri] if ri < n_rows else []
+        cells: list[str] = []
+        for ci in range(n_cols):
+            cov = covered.get((ri, ci))
+            if cov is not None:
+                # Continuation cell — emit hMerge / vMerge marker.
+                if cov == "h":
+                    merge_attrs = ' hMerge="1"'
+                elif cov == "v":
+                    merge_attrs = ' vMerge="1"'
+                else:
+                    merge_attrs = ' hMerge="1" vMerge="1"'
+                cells.append(
+                    _cell_xml(
+                        None,
+                        is_header=header and ri == 0,
+                        is_alt=False,
+                        col_align=col_aligns[ci],
+                        cs_attr="",
+                        rs_attr="",
+                        merge_attrs=merge_attrs,
+                    )
+                )
+                continue
+            cell = row[ci] if ci < len(row) else None
+            if not isinstance(cell, dict):
+                cell = None
+            cs_v = (
+                int(cell.get("col_span", 1) or 1) if cell else 1
+            )
+            rs_v = (
+                int(cell.get("row_span", 1) or 1) if cell else 1
+            )
+            cs_v = max(1, min(cs_v, n_cols - ci))
+            rs_v = max(1, min(rs_v, n_rows - ri))
+            cs_attr = f' gridSpan="{cs_v}"' if cs_v > 1 else ""
+            rs_attr = f' rowSpan="{rs_v}"' if rs_v > 1 else ""
+            is_header = header and ri == 0
+            is_alt = alt_row_bg and not is_header and (
+                ri % 2 == (1 if header else 0)
+            )
+            cells.append(
+                _cell_xml(
+                    cell,
+                    is_header=is_header,
+                    is_alt=is_alt,
+                    col_align=col_aligns[ci],
+                    cs_attr=cs_attr,
+                    rs_attr=rs_attr,
+                    merge_attrs="",
+                )
+            )
+        rows_xml.append(
+            f'<a:tr h="{row_heights[ri]}">{"".join(cells)}</a:tr>'
+        )
+
+    tbl = (
+        f'<a:tbl>'
+        f'<a:tblPr firstRow="{1 if header else 0}" bandRow="{1 if alt_row_bg else 0}">'
+        f'<a:tableStyleId>{{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}}</a:tableStyleId>'
+        f"</a:tblPr>"
+        f"{tbl_grid}"
+        f"{''.join(rows_xml)}"
+        f"</a:tbl>"
+    )
+    return (
+        f'<p:graphicFrame>'
+        f'<p:nvGraphicFramePr>'
+        f'<p:cNvPr id="{sp_id}" name="{_xml_escape(name)}"/>'
+        f'<p:cNvGraphicFramePr><a:graphicFrameLocks noGrp="1"/></p:cNvGraphicFramePr>'
+        f"<p:nvPr/>"
+        f"</p:nvGraphicFramePr>"
+        f'<p:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{w}" cy="{h}"/></p:xfrm>'
+        f'<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">'
+        f"{tbl}"
+        f"</a:graphicData></a:graphic>"
+        f"</p:graphicFrame>"
+    )
+
+
+def _ellipse_marker(
+    sp_id: int, name: str, cx: int, cy: int, r: int, fill: str
+) -> str:
+    return (
+        f'<p:sp><p:nvSpPr><p:cNvPr id="{sp_id}" name="{_xml_escape(name)}"/>'
+        f"<p:cNvSpPr/><p:nvPr/></p:nvSpPr>"
+        f'<p:spPr>'
+        f'<a:xfrm><a:off x="{cx - r}" y="{cy - r}"/><a:ext cx="{2 * r}" cy="{2 * r}"/></a:xfrm>'
+        f'<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{fill}"/></a:solidFill>'
+        f"</p:spPr>"
+        f"<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>"
+        f"</p:sp>"
+    )
+
+
+def _segment_line(
+    sp_id: int,
+    name: str,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    color: str,
+    width_emu: int = 19050,
+) -> str:
+    """Diagonal line implemented as <p:cxnSp> straight connector. Used
+    by line_chart_shape for series segments."""
+    bx, by = min(x1, x2), min(y1, y2)
+    bw, bh = max(abs(x2 - x1), 1), max(abs(y2 - y1), 1)
+    flip_h = "1" if x2 < x1 else "0"
+    flip_v = "1" if y2 < y1 else "0"
+    return (
+        f'<p:cxnSp><p:nvCxnSpPr>'
+        f'<p:cNvPr id="{sp_id}" name="{_xml_escape(name)}"/>'
+        f"<p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>"
+        f'<p:spPr>'
+        f'<a:xfrm flipH="{flip_h}" flipV="{flip_v}">'
+        f'<a:off x="{bx}" y="{by}"/><a:ext cx="{bw}" cy="{bh}"/>'
+        f"</a:xfrm>"
+        f'<a:prstGeom prst="line"><a:avLst/></a:prstGeom>'
+        f'<a:ln w="{width_emu}"><a:solidFill><a:srgbClr val="{color}"/></a:solidFill></a:ln>'
+        f"</p:spPr>"
+        f"</p:cxnSp>"
+    )
+
+
+_DEFAULT_SERIES_COLORS: Final[tuple[str, ...]] = (
+    DEFAULT_PALETTE.purple,
+    DEFAULT_PALETTE.amber,
+    DEFAULT_PALETTE.green,
+    DEFAULT_PALETTE.purple_lt,
+    DEFAULT_PALETTE.purple_dk,
+    DEFAULT_PALETTE.muted,
+)
+
+
+def bar_chart_shape(
+    sp_id: int,
+    name: str,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    *,
+    items: list[tuple[str, float, str | None]] | None = None,
+    series: list[tuple[str, list[float], str | None]] | None = None,
+    categories: list[str] | None = None,
+    mode: str = "grouped",
+    orientation: str = "v",
+    show_values: bool = True,
+    value_format: str = "{:g}",
+    bar_color: str = DEFAULT_PALETTE.purple,
+    axis_color: str = DEFAULT_PALETTE.border,
+    label_color: str = DEFAULT_PALETTE.dark,
+    value_color: str = DEFAULT_PALETTE.black,
+    font_size_pt: int = 10,
+    font: str = DEFAULT_FONT,
+) -> str:
+    """Composite bar chart with single- or multi-series support.
+
+    Single-series: pass ``items=[(label, value, color), ...]``. Each
+    item becomes one bar (negative values clamp to 0).
+
+    Multi-series: pass ``series=[(name, [v1,v2,...], color), ...]``
+    and ``categories=[...]``. ``mode``:
+      * ``"grouped"``: each category shows series side-by-side
+      * ``"stacked"``: series stacked cumulatively per category
+      * ``"stacked100"``: stacked but each category sums to 100%
+
+    ``orientation``: ``"v"`` (bars grow up) or ``"h"`` (grow right).
+    """
+    # Normalize input to (categories, series) form.
+    if items is not None and series is not None:
+        # Caller error — emit nothing rather than mixing.
+        return ""
+    if items is not None:
+        if not items:
+            return ""
+        categories_eff = [lbl for lbl, _, _ in items]
+        # Single synthetic series; per-item color is preserved
+        # via a sentinel list captured below.
+        series_eff: list[tuple[str, list[float], str | None]] = [
+            ("", [v for _, v, _ in items], None)
+        ]
+        per_item_colors: list[str | None] | None = [c for _, _, c in items]
+        mode = "grouped"  # mode is meaningless for single-series
+    else:
+        if not series or not categories:
+            return ""
+        categories_eff = list(categories)
+        series_eff = [
+            (s_name, [float(v) for v in vals], col) for s_name, vals, col in series
+        ]
+        per_item_colors = None
+
+    # Clamp negatives to 0 across the board.
+    series_eff = [
+        (s_name, [max(0.0, v) for v in vals], col)
+        for s_name, vals, col in series_eff
+    ]
+
+    if mode == "stacked100":
+        # Per-category normalization; categories with sum 0 stay all-zero.
+        new_series: list[tuple[str, list[float], str | None]] = []
+        cat_sums = [
+            sum(s_vals[i] for _, s_vals, _ in series_eff)
+            for i in range(len(categories_eff))
+        ]
+        for s_name, vals, col in series_eff:
+            new_vals = [
+                (vals[i] / cat_sums[i] if cat_sums[i] > 0 else 0.0)
+                for i in range(len(categories_eff))
+            ]
+            new_series.append((s_name, new_vals, col))
+        series_eff = new_series
+        # Force value_format to a percent if it's still the default.
+        if value_format == "{:g}":
+            value_format = "{:.0%}"
+
+    n_cat = len(categories_eff)
+    n_ser = len(series_eff)
+
+    if mode == "stacked" or mode == "stacked100":
+        category_extents = [
+            sum(s_vals[i] for _, s_vals, _ in series_eff) for i in range(n_cat)
+        ]
+    else:  # grouped
+        category_extents = [
+            max((s_vals[i] for _, s_vals, _ in series_eff), default=0.0)
+            for i in range(n_cat)
+        ]
+    vmax = max(category_extents) if category_extents else 0.0
+    if vmax <= 0:
+        vmax = 1.0
+
+    x, y, w, h = _i(x), _i(y), _i(w), _i(h)
+    label_band = _i(font_size_pt * 100 * 2.5)
+    value_band = _i(font_size_pt * 100 * 1.8) if show_values else 0
+
+    parts: list[str] = []
+    sub = 0
+
+    def _next_id() -> int:
+        nonlocal sub
+        sub += 1
+        return _sub_id(sp_id, sub)
+
+    def _series_color(s_idx: int, col: str | None) -> str:
+        if col:
+            return col
+        return _DEFAULT_SERIES_COLORS[s_idx % len(_DEFAULT_SERIES_COLORS)]
+
+    def _bar_color_for(cat_idx: int, ser_idx: int, col: str | None) -> str:
+        # In single-series item mode, prefer per-item color override.
+        if per_item_colors is not None:
+            override = per_item_colors[cat_idx]
+            if override:
+                return override
+            return bar_color
+        return _series_color(ser_idx, col)
+
+    if orientation == "v":
+        plot_top = y + value_band
+        plot_bottom = y + h - label_band
+        plot_h = max(plot_bottom - plot_top, 1)
+        # Baseline (axis line)
+        parts.append(
+            rect_shape(
+                _next_id(), f"{name}_axis", x, plot_bottom, w,
+                max(_i(0.012 * EMU_PER_INCH), 1), axis_color,
+            )
+        )
+        slot_w = w // max(n_cat, 1)
+        slot_pad = max(slot_w // 8, 1)
+        usable_slot_w = max(slot_w - slot_pad * 2, 1)
+
+        for ci in range(n_cat):
+            slot_x = x + ci * slot_w + slot_pad
+            ext_value = category_extents[ci]
+            cat_total_h = _i(plot_h * (ext_value / vmax))
+            if mode == "grouped":
+                bar_gap = max(usable_slot_w // (n_ser * 6), 1) if n_ser > 1 else 0
+                bar_w_each = max(
+                    (usable_slot_w - bar_gap * (n_ser - 1)) // max(n_ser, 1), 1
+                )
+                for si in range(n_ser):
+                    s_name, vals, col = series_eff[si]
+                    v = vals[ci]
+                    bh = _i(plot_h * (v / vmax))
+                    bx = slot_x + si * (bar_w_each + bar_gap)
+                    by_top = plot_bottom - bh
+                    parts.append(
+                        rect_shape(
+                            _next_id(),
+                            f"{name}_c{ci}_s{si}",
+                            bx, by_top, bar_w_each, max(bh, 1),
+                            _bar_color_for(ci, si, col),
+                        )
+                    )
+                    if show_values:
+                        parts.append(
+                            text_box(
+                                _next_id(), f"{name}_v{ci}_s{si}",
+                                bx, by_top - value_band, bar_w_each, value_band,
+                                value_format.format(v),
+                                size_pt=font_size_pt, color=value_color, font=font,
+                                align="ctr",
+                            )
+                        )
+            else:  # stacked / stacked100
+                cursor = plot_bottom
+                for si in range(n_ser):
+                    s_name, vals, col = series_eff[si]
+                    v = vals[ci]
+                    seg_h = _i(plot_h * (v / vmax))
+                    if seg_h <= 0:
+                        continue
+                    seg_top = cursor - seg_h
+                    parts.append(
+                        rect_shape(
+                            _next_id(),
+                            f"{name}_c{ci}_s{si}",
+                            slot_x, seg_top, usable_slot_w, seg_h,
+                            _bar_color_for(ci, si, col),
+                        )
+                    )
+                    if show_values and seg_h > value_band:
+                        # Place segment value inside the segment.
+                        parts.append(
+                            text_box(
+                                _next_id(), f"{name}_v{ci}_s{si}",
+                                slot_x, seg_top, usable_slot_w, value_band,
+                                value_format.format(v),
+                                size_pt=font_size_pt, color="FFFFFF", font=font,
+                                align="ctr",
+                            )
+                        )
+                    cursor = seg_top
+                # Total above the stack (only meaningful for plain
+                # stacked; stacked100 always sums to 1).
+                if show_values and cat_total_h > 0 and mode == "stacked":
+                    parts.append(
+                        text_box(
+                            _next_id(), f"{name}_t{ci}",
+                            slot_x, plot_bottom - cat_total_h - value_band,
+                            usable_slot_w, value_band,
+                            value_format.format(ext_value),
+                            size_pt=font_size_pt, color=value_color, font=font,
+                            align="ctr",
+                        )
+                    )
+            # Category label
+            parts.append(
+                text_box(
+                    _next_id(), f"{name}_lbl{ci}",
+                    slot_x, plot_bottom, usable_slot_w, label_band,
+                    categories_eff[ci],
+                    size_pt=font_size_pt, color=label_color, font=font, align="ctr",
+                )
+            )
+    else:  # horizontal
+        label_band_w = max(_i(w * 0.22), label_band)
+        plot_left = x + label_band_w
+        plot_right = x + w - (value_band if show_values else 0)
+        plot_w = max(plot_right - plot_left, 1)
+        axis_w = max(_i(0.012 * EMU_PER_INCH), 1)
+        parts.append(
+            rect_shape(
+                _next_id(), f"{name}_axis",
+                plot_left - axis_w, y, axis_w, h, axis_color,
+            )
+        )
+        slot_h = h // max(n_cat, 1)
+        slot_pad = max(slot_h // 8, 1)
+        usable_slot_h = max(slot_h - slot_pad * 2, 1)
+
+        for ci in range(n_cat):
+            slot_y = y + ci * slot_h + slot_pad
+            ext_value = category_extents[ci]
+            cat_total_w = _i(plot_w * (ext_value / vmax))
+            if mode == "grouped":
+                bar_gap = max(usable_slot_h // (n_ser * 6), 1) if n_ser > 1 else 0
+                bar_h_each = max(
+                    (usable_slot_h - bar_gap * (n_ser - 1)) // max(n_ser, 1), 1
+                )
+                for si in range(n_ser):
+                    s_name, vals, col = series_eff[si]
+                    v = vals[ci]
+                    bw = _i(plot_w * (v / vmax))
+                    by = slot_y + si * (bar_h_each + bar_gap)
+                    parts.append(
+                        rect_shape(
+                            _next_id(),
+                            f"{name}_c{ci}_s{si}",
+                            plot_left, by, max(bw, 1), bar_h_each,
+                            _bar_color_for(ci, si, col),
+                        )
+                    )
+                    if show_values:
+                        parts.append(
+                            text_box(
+                                _next_id(), f"{name}_v{ci}_s{si}",
+                                plot_left + bw, by, value_band, bar_h_each,
+                                value_format.format(v),
+                                size_pt=font_size_pt, color=value_color, font=font,
+                                align="l",
+                            )
+                        )
+            else:  # stacked / stacked100
+                cursor = plot_left
+                for si in range(n_ser):
+                    s_name, vals, col = series_eff[si]
+                    v = vals[ci]
+                    seg_w = _i(plot_w * (v / vmax))
+                    if seg_w <= 0:
+                        continue
+                    parts.append(
+                        rect_shape(
+                            _next_id(),
+                            f"{name}_c{ci}_s{si}",
+                            cursor, slot_y, seg_w, usable_slot_h,
+                            _bar_color_for(ci, si, col),
+                        )
+                    )
+                    if show_values and seg_w > value_band:
+                        parts.append(
+                            text_box(
+                                _next_id(), f"{name}_v{ci}_s{si}",
+                                cursor, slot_y, seg_w, usable_slot_h,
+                                value_format.format(v),
+                                size_pt=font_size_pt, color="FFFFFF", font=font,
+                                align="ctr",
+                            )
+                        )
+                    cursor += seg_w
+                if show_values and mode == "stacked" and cat_total_w > 0:
+                    parts.append(
+                        text_box(
+                            _next_id(), f"{name}_t{ci}",
+                            plot_left + cat_total_w, slot_y,
+                            value_band, usable_slot_h,
+                            value_format.format(ext_value),
+                            size_pt=font_size_pt, color=value_color, font=font,
+                            align="l",
+                        )
+                    )
+            # Category label on the left
+            parts.append(
+                text_box(
+                    _next_id(), f"{name}_lbl{ci}",
+                    x, slot_y, label_band_w - axis_w, usable_slot_h,
+                    categories_eff[ci],
+                    size_pt=font_size_pt, color=label_color, font=font, align="r",
+                )
+            )
+    return "".join(parts)
+
+
+def line_chart_shape(
+    sp_id: int,
+    name: str,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    *,
+    series: list[tuple[str, list[float], str | None]],
+    x_labels: list[str] | None = None,
+    show_markers: bool = True,
+    axis_color: str = DEFAULT_PALETTE.border,
+    label_color: str = DEFAULT_PALETTE.dark,
+    line_width_emu: int = 19050,
+    marker_radius_emu: int = 38100,
+    font_size_pt: int = 9,
+    font: str = DEFAULT_FONT,
+) -> str:
+    """Composite line chart.
+
+    `series` is `[(name, values, color_or_None), ...]`. All series
+    share the same x-axis (their length is taken from the longest
+    series; shorter ones are padded with the last value).
+    `x_labels` aligns to the x-axis category positions; if None, no
+    bottom labels are drawn.
+    """
+    if not series:
+        return ""
+    x, y, w, h = _i(x), _i(y), _i(w), _i(h)
+    n_pts = max(len(vals) for _, vals, _ in series)
+    if n_pts < 2:
+        # Need at least two points to draw a line.
+        return ""
+    all_vals = [v for _, vals, _ in series for v in vals]
+    vmin = min(all_vals)
+    vmax = max(all_vals)
+    if vmax == vmin:
+        vmax = vmin + 1.0
+    label_band = _i(font_size_pt * 100 * 2.2) if x_labels else 0
+    plot_top = y
+    plot_bottom = y + h - label_band
+    plot_h = max(plot_bottom - plot_top, 1)
+
+    parts: list[str] = []
+    sub = 0
+
+    def _next_id() -> int:
+        nonlocal sub
+        sub += 1
+        return _sub_id(sp_id, sub)
+
+    # X axis line at the bottom of the plot area.
+    axis_h = max(_i(0.012 * EMU_PER_INCH), 1)
+    parts.append(
+        rect_shape(
+            _next_id(), f"{name}_axis", x, plot_bottom, w, axis_h, axis_color,
+        )
+    )
+
+    step = w // max(n_pts - 1, 1)
+
+    def _y_for(v: float) -> int:
+        return plot_bottom - _i(plot_h * ((v - vmin) / (vmax - vmin)))
+
+    for s_idx, (_s_name, vals, col) in enumerate(series):
+        color = col or DEFAULT_PALETTE.purple
+        # Pad short series with their last value so the line still
+        # spans the full x range. (Caller can opt out by giving every
+        # series the same length.)
+        padded = list(vals) + [vals[-1]] * (n_pts - len(vals)) if vals else [0.0] * n_pts
+        pts: list[tuple[int, int]] = []
+        for i, v in enumerate(padded):
+            px = x + i * step
+            py = _y_for(float(v))
+            pts.append((px, py))
+        for i in range(len(pts) - 1):
+            x1, y1 = pts[i]
+            x2, y2 = pts[i + 1]
+            parts.append(
+                _segment_line(
+                    _next_id(), f"{name}_s{s_idx}_seg{i}", x1, y1, x2, y2, color,
+                    width_emu=line_width_emu,
+                )
+            )
+        if show_markers:
+            for i, (px, py) in enumerate(pts):
+                parts.append(
+                    _ellipse_marker(
+                        _next_id(), f"{name}_s{s_idx}_m{i}", px, py, marker_radius_emu, color,
+                    )
+                )
+
+    if x_labels:
+        for i in range(n_pts):
+            lbl = x_labels[i] if i < len(x_labels) else ""
+            cx = x + i * step
+            parts.append(
+                text_box(
+                    _next_id(), f"{name}_xl{i}", cx - step // 2, plot_bottom,
+                    step, label_band, lbl,
+                    size_pt=font_size_pt, color=label_color, font=font, align="ctr",
+                )
+            )
+    return "".join(parts)
+
+
+def pie_chart_shape(
+    sp_id: int,
+    name: str,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    *,
+    slices: list[tuple[str, float, str | None]],
+    palette: Palette = DEFAULT_PALETTE,
+) -> str:
+    """Pie chart using <a:prstGeom prst="pie"> sectors.
+
+    Each slice is a separate <p:sp> covering the same bounding box,
+    with adj1/adj2 set to the start/end angles (units = 60000ths of
+    a degree, 0 = 3 o'clock, sweeping clockwise).
+
+    Slices with non-positive values are skipped. Labels are NOT
+    rendered inline (the LLM can compose pill labels around the
+    pie if it needs them); keeping this primitive label-free avoids
+    overlap heuristics inside the deterministic emitter.
+    """
+    if not slices:
+        return ""
+    x, y, w, h = _i(x), _i(y), _i(w), _i(h)
+    # Square the bounding box to keep the pie circular (use min side,
+    # center inside the requested rect).
+    side = min(w, h)
+    cx = x + (w - side) // 2
+    cy = y + (h - side) // 2
+
+    total = sum(max(0.0, float(v)) for _, v, _ in slices)
+    if total <= 0:
+        return ""
+
+    auto_colors = [
+        palette.purple, palette.purple_lt, palette.amber, palette.green,
+        palette.muted, palette.purple_dk, palette.purple_bg, palette.dark,
+    ]
+
+    parts: list[str] = []
+    cursor = 0  # 60000ths of a degree
+    full = 360 * 60000
+    sub = 0
+    for i, (_, val, col) in enumerate(slices):
+        v = max(0.0, float(val))
+        if v <= 0:
+            continue
+        sweep = round(full * (v / total))
+        start = cursor
+        end = (cursor + sweep) % full
+        cursor = (cursor + sweep) % full
+        sub += 1
+        sid = _sub_id(sp_id, sub)
+        fill = col or auto_colors[i % len(auto_colors)]
+        parts.append(
+            f'<p:sp><p:nvSpPr>'
+            f'<p:cNvPr id="{sid}" name="{_xml_escape(name)}_s{i}"/>'
+            f"<p:cNvSpPr/><p:nvPr/></p:nvSpPr>"
+            f'<p:spPr>'
+            f'<a:xfrm><a:off x="{cx}" y="{cy}"/><a:ext cx="{side}" cy="{side}"/></a:xfrm>'
+            f'<a:prstGeom prst="pie">'
+            f'<a:avLst>'
+            f'<a:gd name="adj1" fmla="val {start}"/>'
+            f'<a:gd name="adj2" fmla="val {end}"/>'
+            f"</a:avLst>"
+            f"</a:prstGeom>"
+            f'<a:solidFill><a:srgbClr val="{fill}"/></a:solidFill>'
+            f"</p:spPr>"
+            f"<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>"
+            f"</p:sp>"
+        )
+    return "".join(parts)
 
 
 def h_line(

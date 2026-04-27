@@ -92,7 +92,7 @@ def test_retries_then_succeeds_after_validation_error() -> None:
     spec = design_layout(
         slide={"index": 4, "layout": "content"},
         template_page_meta={},
-        body_rect=(0, 0, 1000, 1000),
+        body_rect=(365760, 1737360, 8412480, 2834640),
         llm=llm,
         max_retries=2,
     )
@@ -106,7 +106,7 @@ def test_returns_none_when_all_retries_fail() -> None:
     spec = design_layout(
         slide={"index": 4, "layout": "content"},
         template_page_meta={},
-        body_rect=(0, 0, 1000, 1000),
+        body_rect=(365760, 1737360, 8412480, 2834640),
         llm=llm,
         max_retries=2,
     )
@@ -124,7 +124,7 @@ def test_returns_none_when_llm_raises() -> None:
     spec = design_layout(
         slide={"index": 4, "layout": "content"},
         template_page_meta={},
-        body_rect=(0, 0, 1000, 1000),
+        body_rect=(365760, 1737360, 8412480, 2834640),
         llm=Boom(),
     )
     assert spec is None
@@ -136,7 +136,7 @@ def test_extracts_json_from_code_fence() -> None:
     spec = design_layout(
         slide={"index": 4, "layout": "content"},
         template_page_meta={},
-        body_rect=(0, 0, 1000, 1000),
+        body_rect=(365760, 1737360, 8412480, 2834640),
         llm=llm,
     )
     assert isinstance(spec, LayoutSpec)
@@ -162,8 +162,104 @@ def test_slide_to_designer_dict_drops_unrelated_fields() -> None:
     }
 
 
+def test_bounds_violation_triggers_retry_with_feedback() -> None:
+    # First reply is valid Pydantic but extends past body_rect; second
+    # is the same shape clamped inside. Designer should retry and
+    # succeed on the second attempt.
+    out_of_bounds = json.dumps(
+        {
+            "slide_index": 1,
+            "shapes": [
+                {
+                    "kind": "rect",
+                    "name": "x",
+                    "x": 9_000_000,  # outside body
+                    "y": 0,
+                    "w": 100_000,
+                    "h": 100_000,
+                    "fill": "primary",
+                }
+            ],
+        }
+    )
+    in_bounds = json.dumps(
+        {
+            "slide_index": 1,
+            "shapes": [
+                {
+                    "kind": "rect",
+                    "name": "x",
+                    "x": 100,
+                    "y": 100,
+                    "w": 1000,
+                    "h": 1000,
+                    "fill": "primary",
+                }
+            ],
+        }
+    )
+    llm = _StubLLM([out_of_bounds, in_bounds])
+    spec = design_layout(
+        slide={"index": 1, "layout": "content"},
+        template_page_meta={},
+        body_rect=(0, 0, 10_000, 10_000),
+        llm=llm,
+        max_retries=2,
+    )
+    assert spec is not None
+    assert len(llm.calls) == 2
+    # Retry prompt mentions the bounds error so the LLM knows to fix.
+    second_prompt = llm.calls[1]["messages"][0]["content"]
+    assert "body_area" in second_prompt or "越境" in second_prompt
+
+
+def test_bounds_violation_returns_none_after_exhausting_retries() -> None:
+    bad = json.dumps(
+        {
+            "slide_index": 1,
+            "shapes": [
+                {
+                    "kind": "rect",
+                    "name": "x",
+                    "x": 9_000_000,
+                    "y": 0,
+                    "w": 100_000,
+                    "h": 100_000,
+                    "fill": "primary",
+                }
+            ],
+        }
+    )
+    llm = _StubLLM([bad, bad, bad])
+    spec = design_layout(
+        slide={"index": 1, "layout": "content"},
+        template_page_meta={},
+        body_rect=(0, 0, 10_000, 10_000),
+        llm=llm,
+        max_retries=2,
+    )
+    assert spec is None
+    assert len(llm.calls) == 3
+
+
 def test_user_prompt_carries_body_rect_and_slide() -> None:
-    llm = _StubLLM([json.dumps(_VALID_SPEC)])
+    # Use a spec that fits inside the tiny body_rect so the prompt
+    # assertion isn't affected by bounds-validation retries.
+    tiny_spec = {
+        "slide_index": 1,
+        "shapes": [
+            {
+                "kind": "rect",
+                "name": "bg",
+                "x": 200,
+                "y": 500,
+                "w": 100,
+                "h": 100,
+                "fill": "primary",
+            }
+        ],
+    }
+    llm = _StubLLM([json.dumps(tiny_spec)])
     design_layout(
         slide={"index": 4, "layout": "content", "content": {"title": "T"}},
         template_page_meta={"layout": "content"},
