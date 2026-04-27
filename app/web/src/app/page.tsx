@@ -10,6 +10,7 @@ export default function HomePage() {
         <Card href="/templates/" title="テンプレート" body="コーポレートテンプレートをアップロードして管理" />
         <Card href="/projects/" title="プロジェクト" body="新規作成・骨格生成・修正・エクスポート" />
         <Card href="/projects/" title="提案書を書く" body="自然言語から骨格を生成" />
+        <Card href="/samples/" title="サンプル集" body="図種 × 参考プロンプト別のレンダリング例を一覧" />
       </div>
     </section>
   );
