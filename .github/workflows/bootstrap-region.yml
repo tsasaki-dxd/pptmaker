@@ -1,0 +1,134 @@
+name: Bootstrap region
+
+# One-shot CDK bootstrap for an additional AWS region. The main
+# bootstrap.yml only handles ap-northeast-1; this workflow exists so
+# we can stand up us-east-1 for the CloudFront/ACM cert (Cert-prod)
+# without dropping to a local terminal. Idempotent — safe to re-run.
+#
+# Required secrets (Settings → Secrets and variables → Actions → Secrets):
+#   BOOTSTRAP_AWS_ACCESS_KEY_ID      Admin-level IAM access key
+#   BOOTSTRAP_AWS_SECRET_ACCESS_KEY  Same, secret part
+#
+# These are the same secrets the original bootstrap.yml uses. If they
+# were revoked after the first bootstrap, recreate a temporary admin
+# IAM user, paste the keys, run this workflow, then revoke again.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type BOOTSTRAP to confirm.'
+        required: true
+        type: string
+      region:
+        description: 'AWS region to bootstrap (e.g. us-east-1 for the CloudFront cert).'
+        required: true
+        type: string
+        default: us-east-1
+      delete_orphan_bucket:
+        description: |
+          Delete the orphan cdk-hnb659fds-assets bucket in this region
+          before bootstrap. Only check this if the previous attempt
+          failed with "Bucket exists, but we don't have access".
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap_region:
+    if: ${{ inputs.confirm == 'BOOTSTRAP' }}
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.BOOTSTRAP_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.BOOTSTRAP_AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ inputs.region }}
+      AWS_DEFAULT_REGION: ${{ inputs.region }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Validate secrets
+        run: |
+          for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+            if [ -z "${!v}" ]; then
+              echo "::error::$v is empty. Set BOOTSTRAP_$v in repo Secrets."
+              exit 1
+            fi
+          done
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r infra/requirements.txt
+          npm install -g aws-cdk
+
+      - name: Resolve account
+        id: acct
+        run: |
+          ACCT=$(aws sts get-caller-identity --query Account --output text)
+          echo "aws_account_id=$ACCT" >> "$GITHUB_OUTPUT"
+          echo "Account: $ACCT  Region: $AWS_REGION"
+
+      # Orphan-bucket cleanup. CDK bootstrap can't take over an
+      # existing bucket whose IAM/policy state doesn't match what the
+      # current toolkit expects — symptom is a deploy-time
+      # "exists, but we don't have access" from cdk-assets. Wiping it
+      # and letting bootstrap recreate is the cheapest fix; the bucket
+      # only ever holds CDK asset zips for this region.
+      - name: Optionally delete orphan assets bucket
+        if: ${{ inputs.delete_orphan_bucket == true }}
+        env:
+          ACCT: ${{ steps.acct.outputs.aws_account_id }}
+        run: |
+          BUCKET="cdk-hnb659fds-assets-$ACCT-$AWS_REGION"
+          echo "Removing orphan bucket: $BUCKET"
+          # `--region` is mandatory because the bucket may be in a
+          # region different from the default-cli region resolution.
+          aws s3 rm "s3://$BUCKET" --recursive --region "$AWS_REGION" || true
+          aws s3api delete-bucket --bucket "$BUCKET" --region "$AWS_REGION" || true
+
+      - name: CDK bootstrap
+        working-directory: infra
+        env:
+          ACCT: ${{ steps.acct.outputs.aws_account_id }}
+          CDK_DEFAULT_ACCOUNT: ${{ steps.acct.outputs.aws_account_id }}
+          CDK_DEFAULT_REGION: ${{ inputs.region }}
+        run: |
+          cdk bootstrap "aws://$ACCT/$AWS_REGION" \
+            --trust "$ACCT" \
+            --cloudformation-execution-policies arn:aws:iam::aws:policy/AdministratorAccess
+
+      - name: Summary
+        if: always()
+        env:
+          ACCT: ${{ steps.acct.outputs.aws_account_id }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          # Bootstrap complete: \`aws://$ACCT/$AWS_REGION\`
+
+          The CDK toolkit stack (CDKToolkit) is now in place, including the
+          \`cdk-hnb659fds-assets-$ACCT-$AWS_REGION\` bucket and the
+          \`cdk-hnb659fds-{deploy,file-publishing,image-publishing,lookup,cfn-exec}-role-...\`
+          roles, all trusted by the same AWS account so the existing
+          deploy pipeline can publish assets here.
+
+          ## Next steps
+
+          1. (Optional) Revoke / rotate the \`BOOTSTRAP_*\` IAM credentials.
+          2. Re-trigger the main pipeline:
+             - AWS Console → **CodePipeline** → **SlideForge-Deploy** → **Release change**, or
+             - retry the failed Deploy stage from the previous execution.
+
+          The next \`cdk deploy "*"\` will now succeed for stacks targeting
+          \`$AWS_REGION\` (Cert-prod for CloudFront/ACM, etc.).
+          EOF
