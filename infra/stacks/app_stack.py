@@ -13,6 +13,9 @@ from pathlib import Path
 import aws_cdk as cdk
 from aws_cdk import aws_apigatewayv2 as apigw2
 from aws_cdk import aws_apigatewayv2_integrations as apigw2_integ
+from aws_cdk import aws_certificatemanager as acm
+from aws_cdk import aws_cloudfront as cloudfront
+from aws_cdk import aws_cloudfront_origins as cf_origins
 from aws_cdk import aws_cloudwatch as cw
 from aws_cdk import aws_cognito as cognito
 from aws_cdk import aws_ec2 as ec2
@@ -30,10 +33,33 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class AppStack(cdk.Stack):
-    def __init__(self, scope: Construct, id_: str, *, stage_name: str, **kwargs) -> None:
+    def __init__(
+        self,
+        scope: Construct,
+        id_: str,
+        *,
+        stage_name: str,
+        custom_domain: str | None = None,
+        custom_domain_certificate: acm.ICertificate | None = None,
+        **kwargs,
+    ) -> None:
         super().__init__(scope, id_, **kwargs)
 
         self.stage_name = stage_name
+        # When both are present we put a CloudFront distribution in
+        # front of the SPA + API so the browser can talk to one origin
+        # over HTTPS at the user's own hostname. Both must be supplied
+        # together; passing one without the other is a wiring bug and
+        # we fail fast rather than silently degrade.
+        if (custom_domain is None) != (custom_domain_certificate is None):
+            raise ValueError(
+                "AppStack: custom_domain and custom_domain_certificate "
+                "must be provided together (got "
+                f"domain={custom_domain!r}, cert={custom_domain_certificate!r})"
+            )
+        self.custom_domain = custom_domain
+        self.custom_domain_certificate = custom_domain_certificate
+        self.use_custom_domain = custom_domain is not None
 
         # ---- Data plane ----
         self.key = kms.Key(
@@ -91,21 +117,41 @@ class AppStack(cdk.Stack):
         # bucket_name — CDK generates a unique one per deploy so we
         # don't get "bucket already exists" from stray retained buckets
         # left behind by earlier failed stacks.
-        self.web_bucket = s3.Bucket(
-            self,
-            "WebBucket",
-            website_index_document="index.html",
-            website_error_document="index.html",
-            public_read_access=True,
-            block_public_access=s3.BlockPublicAccess(
-                block_public_acls=False,
-                block_public_policy=False,
-                ignore_public_acls=False,
-                restrict_public_buckets=False,
-            ),
-            removal_policy=cdk.RemovalPolicy.DESTROY,
-            auto_delete_objects=True,
-        )
+        #
+        # Private vs public is driven by use_custom_domain: when off,
+        # we keep the legacy public S3 website (browser hits
+        # http://...s3-website-... directly). When on, the bucket goes
+        # fully private and CloudFront's OAC serves it over HTTPS at
+        # the user's domain.
+        if self.use_custom_domain:
+            self.web_bucket = s3.Bucket(
+                self,
+                "WebBucket",
+                # Private; OAC grants CloudFront read.
+                public_read_access=False,
+                block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+                # Static website hosting is unnecessary with CloudFront —
+                # the distribution handles the index document and SPA
+                # 404→index fallback for client routing.
+                removal_policy=cdk.RemovalPolicy.DESTROY,
+                auto_delete_objects=True,
+            )
+        else:
+            self.web_bucket = s3.Bucket(
+                self,
+                "WebBucket",
+                website_index_document="index.html",
+                website_error_document="index.html",
+                public_read_access=True,
+                block_public_access=s3.BlockPublicAccess(
+                    block_public_acls=False,
+                    block_public_policy=False,
+                    ignore_public_acls=False,
+                    restrict_public_buckets=False,
+                ),
+                removal_policy=cdk.RemovalPolicy.DESTROY,
+                auto_delete_objects=True,
+            )
 
         # Why a NAT Gateway here:
         #
@@ -666,14 +712,115 @@ class AppStack(cdk.Stack):
             ),
         )
 
+        # ---- CloudFront (only when a custom domain is configured) ----
+        #
+        # Two origins under one HTTPS distribution so the browser sees
+        # everything as same-origin: that kills CORS as a moving part
+        # and lets the SPA hit /api/* without preflight OPTIONS.
+        #
+        # Default behavior:  S3 (private, OAC) → SPA static files
+        # /api/* behavior:   API Gateway HTTP API → FastAPI Lambda
+        #
+        # If/when the custom domain is removed, deploy reverts to the
+        # legacy public S3 website branch above.
+        self.distribution: cloudfront.Distribution | None = None
+        if self.use_custom_domain:
+            assert self.custom_domain is not None
+            assert self.custom_domain_certificate is not None
+
+            api_origin = cf_origins.HttpOrigin(
+                # `api_endpoint` is e.g. https://abc.execute-api.<region>.amazonaws.com
+                # — strip the scheme + trailing slash for the origin host.
+                cdk.Fn.select(2, cdk.Fn.split("/", self.http_api.api_endpoint)),
+                protocol_policy=cloudfront.OriginProtocolPolicy.HTTPS_ONLY,
+            )
+
+            api_behavior = cloudfront.BehaviorOptions(
+                origin=api_origin,
+                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                # Anything mutating goes through here (POST /revise,
+                # PATCH /blueprint, etc.), so allow the full method set.
+                allowed_methods=cloudfront.AllowedMethods.ALLOW_ALL,
+                cached_methods=cloudfront.CachedMethods.CACHE_GET_HEAD,
+                # API responses must never be cached: every request is
+                # tenant-scoped and most are dynamic. Forward everything
+                # to the origin verbatim.
+                cache_policy=cloudfront.CachePolicy.CACHING_DISABLED,
+                origin_request_policy=cloudfront.OriginRequestPolicy.ALL_VIEWER_EXCEPT_HOST_HEADER,
+            )
+
+            web_origin = cf_origins.S3BucketOrigin.with_origin_access_control(
+                self.web_bucket,
+            )
+
+            self.distribution = cloudfront.Distribution(
+                self,
+                "WebDistribution",
+                domain_names=[self.custom_domain],
+                certificate=self.custom_domain_certificate,
+                default_root_object="index.html",
+                default_behavior=cloudfront.BehaviorOptions(
+                    origin=web_origin,
+                    viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+                    cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
+                    compress=True,
+                ),
+                additional_behaviors={
+                    "/api/*": api_behavior,
+                },
+                # Next.js static export emits per-route HTML files; a
+                # client-side route refresh hits a missing key when the
+                # browser asks for /projects/list/. Map 403/404 from S3
+                # back to /index.html so the SPA's router takes over.
+                error_responses=[
+                    cloudfront.ErrorResponse(
+                        http_status=403,
+                        response_http_status=200,
+                        response_page_path="/index.html",
+                        ttl=cdk.Duration.seconds(0),
+                    ),
+                    cloudfront.ErrorResponse(
+                        http_status=404,
+                        response_http_status=200,
+                        response_page_path="/index.html",
+                        ttl=cdk.Duration.seconds(0),
+                    ),
+                ],
+                price_class=cloudfront.PriceClass.PRICE_CLASS_200,
+                comment=f"SlideForge {stage_name} ({self.custom_domain})",
+            )
+
         cdk.CfnOutput(self, "ApiEndpoint", value=self.http_api.api_endpoint)
         cdk.CfnOutput(self, "UserPoolId", value=self.user_pool.user_pool_id)
         cdk.CfnOutput(self, "UserPoolClientId", value=self.user_pool_client.user_pool_client_id)
         cdk.CfnOutput(self, "ArtifactsBucketName", value=self.artifacts_bucket.bucket_name)
         cdk.CfnOutput(self, "RenderQueueUrl", value=self.render_queue.queue_url)
         cdk.CfnOutput(self, "WebBucketName", value=self.web_bucket.bucket_name)
-        cdk.CfnOutput(
-            self,
-            "WebsiteUrl",
-            value=f"http://{self.web_bucket.bucket_website_domain_name}",
-        )
+        if self.distribution is not None:
+            assert self.custom_domain is not None
+            cdk.CfnOutput(
+                self,
+                "WebsiteUrl",
+                value=f"https://{self.custom_domain}",
+            )
+            cdk.CfnOutput(
+                self,
+                "DistributionDomainName",
+                value=self.distribution.distribution_domain_name,
+                description=(
+                    "Add a CNAME from the custom domain to this value on "
+                    "the parent DNS host (スターサーバー)."
+                ),
+            )
+            cdk.CfnOutput(
+                self,
+                "DistributionId",
+                value=self.distribution.distribution_id,
+                description="Used by the deploy pipeline to invalidate the SPA cache.",
+            )
+        else:
+            cdk.CfnOutput(
+                self,
+                "WebsiteUrl",
+                value=f"http://{self.web_bucket.bucket_website_domain_name}",
+            )
