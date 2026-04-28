@@ -753,6 +753,37 @@ class AppStack(cdk.Stack):
                 self.web_bucket,
             )
 
+            # Next.js static export emits per-route index.html files
+            # (`/projects/index.html`, `/templates/index.html`, …).
+            # S3 in REST/OAC mode doesn't auto-resolve "/projects/" to
+            # "/projects/index.html" the way the website endpoint
+            # would, so without rewriting the path the request returns
+            # 403 and CloudFront's SPA fallback hands the visitor
+            # /index.html (the dashboard). Rewriting at the viewer-
+            # request stage lets S3 see the real key.
+            spa_uri_rewrite = cloudfront.Function(
+                self,
+                "SpaUriRewrite",
+                code=cloudfront.FunctionCode.from_inline(
+                    """
+function handler(event) {
+  var request = event.request;
+  var uri = request.uri;
+  if (uri.endsWith('/')) {
+    request.uri = uri + 'index.html';
+  } else if (uri.split('/').pop().indexOf('.') === -1) {
+    // No file extension in the last segment — treat as a route and
+    // resolve to its index.html (matches Next.js trailingSlash:true
+    // export layout).
+    request.uri = uri + '/index.html';
+  }
+  return request;
+}
+"""
+                ),
+                runtime=cloudfront.FunctionRuntime.JS_2_0,
+            )
+
             self.distribution = cloudfront.Distribution(
                 self,
                 "WebDistribution",
@@ -764,6 +795,12 @@ class AppStack(cdk.Stack):
                     viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
                     cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
                     compress=True,
+                    function_associations=[
+                        cloudfront.FunctionAssociation(
+                            function=spa_uri_rewrite,
+                            event_type=cloudfront.FunctionEventType.VIEWER_REQUEST,
+                        ),
+                    ],
                 ),
                 additional_behaviors={
                     "/api/*": api_behavior,
