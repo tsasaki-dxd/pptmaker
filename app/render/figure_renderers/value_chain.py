@@ -120,19 +120,22 @@ class ValueChainRenderer(FigureRenderer):
         "Porter-style value chain. Primary activities (3-7) render as "
         "interlocking chevrons in a single brand color; optional support "
         "activities (0-4) stack vertically above as horizontal bands; an "
-        "optional margin_label adds a same-height chevron cap (in amber) "
-        "right after the last primary. Each primary/support entry can be "
-        "a plain string (label only) OR an object {label, items[]} where "
-        "items are short bullet points of analysis content rendered in "
-        "white cards beneath each primary chevron (or inline next to a "
-        "support label). "
+        "optional margin chevron (in amber) caps the chain on the right. "
+        "Each primary/support entry can be a plain string (label only) OR "
+        "an object {label, items[]} where items are short bullets of "
+        "analysis content rendered in white cards beneath each primary "
+        "chevron (or inline next to a support label). "
+        "`margin_label` accepts the same form: a string for label only, "
+        "or {label, items[]} so the margin column can carry an "
+        "AsIs / ToBe comparison directly under the 利益 chevron. "
         "content: {primary: [str | {label, items?}], "
-        "support?: [str | {label, items?}], margin_label?: str}"
+        "support?: [str | {label, items?}], "
+        "margin_label?: str | {label, items?}}"
     )
     input_schema_example: ClassVar[dict[str, Any]] = {
         "primary": [
-            {"label": "購買物流", "items": ["JIT 在庫", "サプライヤ品質"]},
-            {"label": "製造", "items": ["自動化", "歩留り改善"]},
+            {"label": "購買物流", "items": ["JIT 化 (理想 在庫日数 7→3)", "サプライヤ品質"]},
+            {"label": "製造", "items": ["自動化", "歩留り 95%→98%"]},
             {"label": "出荷物流", "items": ["即配対応"]},
             {"label": "販売・マーケ", "items": ["直販強化", "代理店網"]},
             {"label": "サービス", "items": ["解約防止"]},
@@ -143,7 +146,10 @@ class ValueChainRenderer(FigureRenderer):
             "技術開発",
             "調達",
         ],
-        "margin_label": "利益",
+        "margin_label": {
+            "label": "利益",
+            "items": ["AsIs: 営業利益率 8%", "ToBe: 12% (+4pt)"],
+        },
     }
 
     def validate(self, content: dict[str, Any]) -> ValidationResult:
@@ -185,8 +191,16 @@ class ValueChainRenderer(FigureRenderer):
                             f"{_MAX_ITEMS_PER_SUPPORT}"
                         )
         margin = content.get("margin_label")
-        if margin is not None and not isinstance(margin, str):
-            errors.append("margin_label must be a string")
+        if margin is not None:
+            norm = _normalize_entry(margin)
+            if norm is None:
+                errors.append(
+                    "margin_label must be a string or {label, items?} object"
+                )
+            elif len(norm["items"]) > _MAX_ITEMS_PER_PRIMARY:
+                errors.append(
+                    f"margin_label.items must have <= {_MAX_ITEMS_PER_PRIMARY}"
+                )
         return ValidationResult(ok=not errors, errors=tuple(errors))
 
     def render(
@@ -208,12 +222,18 @@ class ValueChainRenderer(FigureRenderer):
             for n in (_normalize_entry(e) for e in (content.get("support") or []))
             if n is not None
         ]
-        margin_label: str | None = content.get("margin_label")
+        margin_norm = (
+            _normalize_entry(content.get("margin_label"))
+            if content.get("margin_label") is not None
+            else None
+        )
 
         canvas_w = container.w
         canvas_h = container.h
 
-        has_content = any(e["items"] for e in primary_norm)
+        has_content = any(e["items"] for e in primary_norm) or (
+            margin_norm is not None and bool(margin_norm["items"])
+        )
 
         # ---- vertical band split ----
         if support_norm:
@@ -349,7 +369,7 @@ class ValueChainRenderer(FigureRenderer):
         # ---- chevron strip ----
         primary_y = container.y + support_h + gap_after_support
         n_p = len(primary_norm)
-        margin_present = bool(margin_label)
+        margin_present = margin_norm is not None
         if margin_present:
             denom = (n_p + 1) - n_p * (_CHEVRON_INDENT_PCT / 100.0)
         else:
@@ -392,6 +412,7 @@ class ValueChainRenderer(FigureRenderer):
             sid += 1
 
         if margin_present:
+            assert margin_norm is not None
             mx = container.x + n_p * step
             shapes.append(
                 _chevron(
@@ -413,7 +434,7 @@ class ValueChainRenderer(FigureRenderer):
                     primary_y + 30000,
                     box_w - 2 * indent_emu,
                     chev_h - 60000,
-                    margin_label,
+                    margin_norm["label"],
                     size_pt=12,
                     bold=True,
                     color="FFFFFF",
@@ -424,27 +445,55 @@ class ValueChainRenderer(FigureRenderer):
             )
             sid += 1
 
-        # ---- content cards (one per primary, aligned with chevron) ----
+        # ---- content cards (one per primary + optional margin) ----
+        # Each card sits directly below its chevron and carries the
+        # bullet items. The margin card uses an amber accent so it
+        # reads as the same column as the margin chevron above it.
         if has_content:
             cards_y = primary_y + chev_h + content_gap
             card_inset = max(step // 24, 30000)
-            for i, entry in enumerate(primary_norm):
-                cx = container.x + i * step + card_inset
-                card_w = step - 2 * card_inset
+
+            def _render_card(
+                idx_label: str,
+                col_x: int,
+                entry: dict[str, Any],
+                *,
+                is_margin: bool,
+                start_id: int,
+            ) -> int:
+                cur = start_id
+                col_left = col_x + card_inset
+                col_w = step - 2 * card_inset
                 shapes.append(
                     round_rect_shape(
-                        sid,
-                        f"vc-card-{i}",
-                        cx,
+                        cur,
+                        f"vc-card-{idx_label}",
+                        col_left,
                         cards_y,
-                        card_w,
+                        col_w,
                         cards_h,
                         "FFFFFF",
                         corner_radius_pct=8,
                         shadow=True,
                     )
                 )
-                sid += 1
+                cur += 1
+                if is_margin:
+                    # Thin amber strip across the top so the card
+                    # reads as the 利益 column, not as another primary.
+                    strip_h = max(_i(0.025 * 914400), 18000)
+                    shapes.append(
+                        rect_shape(
+                            cur,
+                            f"vc-card-strip-{idx_label}",
+                            col_left,
+                            cards_y,
+                            col_w,
+                            strip_h,
+                            p.amber,
+                        )
+                    )
+                    cur += 1
                 if entry["items"]:
                     paragraphs = [
                         TextParagraph(
@@ -462,18 +511,31 @@ class ValueChainRenderer(FigureRenderer):
                     ]
                     shapes.append(
                         text_box_paragraphs(
-                            sid,
-                            f"vc-card-items-{i}",
-                            cx + 50000,
-                            cards_y + 40000,
-                            card_w - 100000,
-                            cards_h - 80000,
+                            cur,
+                            f"vc-card-items-{idx_label}",
+                            col_left + 50000,
+                            cards_y + 50000,
+                            col_w - 100000,
+                            cards_h - 90000,
                             paragraphs,
                             font=ctx.font,
                             anchor="t",
                             auto_fit=True,
                         )
                     )
-                    sid += 1
+                    cur += 1
+                return cur
+
+            for i, entry in enumerate(primary_norm):
+                col_x = container.x + i * step
+                sid = _render_card(
+                    str(i), col_x, entry, is_margin=False, start_id=sid
+                )
+
+            if margin_present and margin_norm is not None:
+                col_x = container.x + n_p * step
+                sid = _render_card(
+                    "margin", col_x, margin_norm, is_margin=True, start_id=sid
+                )
 
         return RenderOutput(shapes_xml=shapes, next_shape_id=sid)

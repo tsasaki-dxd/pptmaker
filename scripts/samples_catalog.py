@@ -861,8 +861,9 @@ SAMPLES: list[Sample] = [
         id="flowchart_approval",
         figure_type="flowchart",
         title="申請承認フロー",
-        prompt="申請→金額判定→承認の業務フローに、各ステップの責任者 / SLA も添える",
+        prompt="申請→金額判定→承認の業務フローを横向きに、各ステップの担当 / SLA も添える",
         figure_content={
+            "direction": "horizontal",
             "layers": [
                 [{"id": "s", "label": "開始", "kind": "start"}],
                 [
@@ -908,7 +909,7 @@ SAMPLES: list[Sample] = [
                 {"from": "p4", "to": "e"},
             ],
         },
-        notes="flowchart — process ノードに note (担当・SLA) 追加。decision は note 無視。",
+        notes="flowchart — 横方向 (direction=horizontal)、process に note (担当・SLA)。",
     ),
     Sample(
         id="spider_map_dx",
@@ -983,6 +984,38 @@ SAMPLES: list[Sample] = [
         notes="system_map — グループ列 + ノードカードに notes (技術特徴) を bullet で。",
     ),
     Sample(
+        id="value_flow_ecosystem",
+        figure_type="value_flow",
+        title="エコシステム商流 (5 者)",
+        prompt="顧客・自社・出店者・物流・決済の 5 者の商流を一枚で",
+        figure_content={
+            "actors": [
+                {"id": "cust", "label": "顧客", "role": "個人 / 法人"},
+                {
+                    "id": "us",
+                    "label": "自社",
+                    "role": "プラットフォーム",
+                    "primary": True,
+                    "note": "GMV 12% 手数料",
+                },
+                {"id": "ptr", "label": "出店者", "role": "サプライヤ"},
+                {"id": "log", "label": "物流", "role": "委託先"},
+                {"id": "pay", "label": "決済", "role": "PSP"},
+            ],
+            "flows": [
+                {"from": "cust", "to": "us", "label": "利用料", "kind": "money"},
+                {"from": "us", "to": "cust", "label": "サービス", "kind": "goods"},
+                {"from": "us", "to": "ptr", "label": "売上 (手数料控除後)", "kind": "money"},
+                {"from": "ptr", "to": "us", "label": "在庫データ", "kind": "info"},
+                {"from": "us", "to": "log", "label": "配送委託料", "kind": "money"},
+                {"from": "log", "to": "cust", "label": "商品配送", "kind": "goods"},
+                {"from": "us", "to": "pay", "label": "決済手数料", "kind": "money"},
+                {"from": "pay", "to": "us", "label": "決済 OK", "kind": "info"},
+            ],
+        },
+        notes="value_flow — 5 アクター (五角形配置) + 8 本の typed flows。",
+    ),
+    Sample(
         id="value_flow_marketplace",
         figure_type="value_flow",
         title="マーケットプレイス商流",
@@ -1023,14 +1056,29 @@ SAMPLES: list[Sample] = [
         id="value_chain_porter",
         figure_type="value_chain",
         title="バリューチェーン",
-        prompt="主活動・支援活動の Porter 型 + 各活動の改善ポイントを bullet で添える",
+        prompt="各活動に分析×指標 (理想値) の対比、利益に AsIs/ToBe を入れる",
         figure_content={
             "primary": [
-                {"label": "購買物流", "items": ["JIT 化", "サプライヤ品質"]},
-                {"label": "製造", "items": ["自動化", "歩留り改善"]},
-                {"label": "出荷物流", "items": ["即配対応", "在庫圧縮"]},
-                {"label": "販売・マーケ", "items": ["直販強化", "代理店活用"]},
-                {"label": "サービス", "items": ["解約防止", "更新提案"]},
+                {
+                    "label": "購買物流",
+                    "items": ["JIT 化 (在庫日数 7→3)", "複数社購買 30%"],
+                },
+                {
+                    "label": "製造",
+                    "items": ["自動化率 60%", "歩留り 95→98%"],
+                },
+                {
+                    "label": "出荷物流",
+                    "items": ["翌日着 90%", "誤配 < 0.1%"],
+                },
+                {
+                    "label": "販売・マーケ",
+                    "items": ["LTV +20%", "CAC -15%"],
+                },
+                {
+                    "label": "サービス",
+                    "items": ["解約率 < 1%", "NPS 50+"],
+                },
             ],
             "support": [
                 {"label": "企業インフラ", "items": ["ガバナンス再整備"]},
@@ -1038,9 +1086,16 @@ SAMPLES: list[Sample] = [
                 "技術開発",
                 "調達",
             ],
-            "margin_label": "利益",
+            "margin_label": {
+                "label": "利益",
+                "items": [
+                    "AsIs: 営業利益率 8%",
+                    "ToBe: 12% (+4pt)",
+                    "業界中央値 10%",
+                ],
+            },
         },
-        notes="value_chain — chevron header + 各活動カードに bullet で分析を埋め込む二段構成。",
+        notes="value_chain — 各活動: 分析×指標 / 利益: AsIs vs ToBe。",
     ),
     Sample(
         id="business_canvas_saas",
