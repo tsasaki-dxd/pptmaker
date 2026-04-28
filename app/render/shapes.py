@@ -298,6 +298,7 @@ def round_rect_shape(
     corner_radius_pct: int = 25,
     line_color: str | None = None,
     line_width_emu: int = 0,
+    shadow: bool = False,
 ) -> str:
     """Filled rectangle with custom rounded corners.
 
@@ -306,6 +307,11 @@ def round_rect_shape(
     horizontal rectangle becomes a pill). Values map to OOXML's
     `roundRect` adj range 0..50000 (1000ths of a percent of half the
     shorter side).
+
+    ``shadow=True`` adds a subtle bottom-shifted outer shadow at
+    ~10% black opacity. Visually lifts cards off the slide without
+    needing a heavy border. LibreOffice and PowerPoint both render
+    this; rasterized previews (visual_qa pipeline) also pick it up.
     """
     x, y, w, h = _i(x), _i(y), _i(w), _i(h)
     radius = max(0, min(50, int(corner_radius_pct)))
@@ -317,6 +323,18 @@ def round_rect_shape(
             f'<a:solidFill><a:srgbClr val="{line_color}"/></a:solidFill>'
             f"</a:ln>"
         )
+    effect = ""
+    if shadow:
+        # blurRad ≈ 4pt, dist ≈ 2pt, dir 5400000 = straight down.
+        # alpha 14000 = 14% — enough lift, not enough to look dirty.
+        effect = (
+            "<a:effectLst>"
+            '<a:outerShdw blurRad="50800" dist="25400" dir="5400000" '
+            'algn="t" rotWithShape="0">'
+            '<a:srgbClr val="000000"><a:alpha val="14000"/></a:srgbClr>'
+            "</a:outerShdw>"
+            "</a:effectLst>"
+        )
     return (
         f'<p:sp><p:nvSpPr><p:cNvPr id="{sp_id}" name="{_xml_escape(name)}"/>'
         f'<p:cNvSpPr/><p:nvPr/></p:nvSpPr>'
@@ -325,6 +343,7 @@ def round_rect_shape(
         f'<a:prstGeom prst="roundRect"><a:avLst>{av_lst}</a:avLst></a:prstGeom>'
         f'<a:solidFill><a:srgbClr val="{fill_color}"/></a:solidFill>'
         f"{ln}"
+        f"{effect}"
         f"</p:spPr>"
         f'<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>'
         f"</p:sp>"

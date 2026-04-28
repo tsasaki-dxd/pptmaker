@@ -857,4 +857,90 @@ SAMPLES: list[Sample] = [
         },
         notes="org_chart — parent 参照ツリー。",
     ),
+    Sample(
+        id="flowchart_approval",
+        figure_type="flowchart",
+        title="申請承認フロー",
+        prompt="申請→金額判定→承認 or 自動承認 の業務フローを判断分岐つきで",
+        figure_content={
+            "layers": [
+                [{"id": "s", "label": "開始", "kind": "start"}],
+                [{"id": "p1", "label": "申請内容を入力", "kind": "process"}],
+                [{"id": "d1", "label": "金額 > 100万?", "kind": "decision"}],
+                [
+                    {"id": "p2", "label": "上長承認", "kind": "process"},
+                    {"id": "p3", "label": "自動承認", "kind": "process"},
+                ],
+                [{"id": "p4", "label": "システム反映", "kind": "process"}],
+                [{"id": "e", "label": "完了", "kind": "end"}],
+            ],
+            "edges": [
+                {"from": "s", "to": "p1"},
+                {"from": "p1", "to": "d1"},
+                {"from": "d1", "to": "p2", "label": "Yes"},
+                {"from": "d1", "to": "p3", "label": "No"},
+                {"from": "p2", "to": "p4"},
+                {"from": "p3", "to": "p4"},
+                {"from": "p4", "to": "e"},
+            ],
+        },
+        notes="flowchart — 開始/終了は丸枠、判定は ◇、process は四角。",
+    ),
+    Sample(
+        id="spider_map_dx",
+        figure_type="spider_map",
+        title="DX 推進の 4 領域",
+        prompt="DX 推進の中心テーマから 4 つの取り組み領域を放射状に展開",
+        figure_content={
+            "center": {"label": "DX 推進"},
+            "branches": [
+                {"label": "業務効率化", "items": ["RPA", "ノーコード"]},
+                {"label": "データ活用", "items": ["BI", "AI 予測"]},
+                {"label": "顧客体験", "items": ["UX 改善", "パーソナライズ"]},
+                {"label": "人材育成", "items": ["教育", "リスキリング"]},
+            ],
+        },
+        notes="spider_map — 中央テーマ + 放射枝。各枝に小項目。",
+    ),
+    Sample(
+        id="system_map_arch",
+        figure_type="system_map",
+        title="アーキテクチャ概観",
+        prompt="フロント / バックエンド / 外部システム の 3 グループ構成と矢印で関係",
+        figure_content={
+            "groups": [
+                {
+                    "name": "フロント",
+                    "items": [
+                        {"id": "web", "label": "Web", "sub": "Next.js"},
+                        {"id": "mobile", "label": "Mobile", "sub": "iOS / Android"},
+                    ],
+                },
+                {
+                    "name": "バックエンド",
+                    "items": [
+                        {"id": "api", "label": "API", "sub": "FastAPI"},
+                        {"id": "worker", "label": "Worker", "sub": "SQS"},
+                        {"id": "db", "label": "DB", "sub": "PostgreSQL"},
+                    ],
+                },
+                {
+                    "name": "外部",
+                    "items": [
+                        {"id": "anthropic", "label": "Claude API"},
+                        {"id": "ses", "label": "Email"},
+                    ],
+                },
+            ],
+            "connections": [
+                {"from": "web", "to": "api"},
+                {"from": "mobile", "to": "api"},
+                {"from": "api", "to": "db"},
+                {"from": "api", "to": "worker"},
+                {"from": "worker", "to": "anthropic"},
+                {"from": "worker", "to": "ses"},
+            ],
+        },
+        notes="system_map — グループ列 + ノードカード + コネクタ。",
+    ),
 ]

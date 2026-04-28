@@ -78,6 +78,9 @@ export const FIGURE_TYPES = [
   'waterfall',
   'cost_breakdown',
   'image_slot',
+  'flowchart',
+  'spider_map',
+  'system_map',
 ] as const;
 export type FigureType = (typeof FIGURE_TYPES)[number];
 
