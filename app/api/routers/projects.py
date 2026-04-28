@@ -6,9 +6,10 @@ import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from ..auth import require_tenant
+from ..auth import current_user_id, require_tenant
 from ..models.db import (
     BlueprintJobRow,
     BlueprintRow,
@@ -43,53 +44,48 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 @router.get("", response_model=list[Project])
 def list_projects(
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> list[Project]:
+    # User-scoped: only the project's owner sees it. Pre-migration rows
+    # (owner_user_id IS NULL) stay visible to everyone in the tenant so
+    # nobody loses access to legacy work.
     rows = (
         db.query(ProjectRow)
-        .filter(ProjectRow.tenant_id == tenant_id)
+        .filter(
+            ProjectRow.tenant_id == tenant_id,
+            or_(
+                ProjectRow.owner_user_id == user_id,
+                ProjectRow.owner_user_id.is_(None),
+            ),
+        )
         .order_by(ProjectRow.created_at.desc())
         .all()
     )
-    return [
-        Project(
-            id=r.id,
-            tenant_id=r.tenant_id,
-            name=r.name,
-            template_id=r.template_id,
-            status=r.status,
-            created_at=r.created_at,
-        )
-        for r in rows
-    ]
+    return [_project_to_schema(r) for r in rows]
 
 
 @router.get("/{project_id}", response_model=Project)
 def get_project(
     project_id: str,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> Project:
-    row = _load_project(db, project_id, tenant_id)
-    return Project(
-        id=row.id,
-        tenant_id=row.tenant_id,
-        name=row.name,
-        template_id=row.template_id,
-        status=row.status,
-        created_at=row.created_at,
-    )
+    row = _load_project(db, project_id, tenant_id, user_id)
+    return _project_to_schema(row)
 
 
 @router.delete("/{project_id}")
 def delete_project(
     project_id: str,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> dict:
     """Cascade-delete the project's blueprints, revisions, jobs,
     output rows, and the entire S3 prefix for the project."""
-    row = _load_project(db, project_id, tenant_id)
+    row = _load_project(db, project_id, tenant_id, user_id)
 
     # Collect blueprint ids before deleting so we can clean up child
     # rows by id (no FK ON DELETE CASCADE in the schema).
@@ -126,6 +122,7 @@ def delete_project(
 def duplicate_project(
     project_id: str,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> Project:
     """Copy a project and its latest blueprint into a new project that
@@ -133,10 +130,11 @@ def duplicate_project(
     the user is going to edit the blueprint in step 2 anyway, so a
     fresh render is the right state to land in.
     """
-    src = _load_project(db, project_id, tenant_id)
+    src = _load_project(db, project_id, tenant_id, user_id)
     new_project = ProjectRow(
         id=str(uuid4()),
         tenant_id=tenant_id,
+        owner_user_id=user_id,
         name=f"{src.name} (copy)",
         template_id=src.template_id,
         status="draft",
@@ -165,39 +163,27 @@ def duplicate_project(
 
     db.commit()
     db.refresh(new_project)
-    return Project(
-        id=new_project.id,
-        tenant_id=new_project.tenant_id,
-        name=new_project.name,
-        template_id=new_project.template_id,
-        status=new_project.status,
-        created_at=new_project.created_at,
-    )
+    return _project_to_schema(new_project)
 
 
 @router.post("", response_model=Project)
 def create_project(
     body: ProjectCreate,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> Project:
     row = ProjectRow(
         id=str(uuid4()),
         tenant_id=tenant_id,
+        owner_user_id=user_id,
         name=body.name,
         template_id=str(body.template_id),
     )
     db.add(row)
     db.commit()
     db.refresh(row)
-    return Project(
-        id=row.id,
-        tenant_id=row.tenant_id,
-        name=row.name,
-        template_id=row.template_id,
-        status=row.status,
-        created_at=row.created_at,
-    )
+    return _project_to_schema(row)
 
 
 @router.post(
@@ -209,6 +195,7 @@ def create_blueprint(
     project_id: str,
     body: BlueprintCreate,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> BlueprintJob:
     """Enqueue a blueprint-generation job.
@@ -219,7 +206,7 @@ def create_blueprint(
     blueprint_worker Lambda, and return 202. The client polls
     GET /blueprint/job/{job_id}.
     """
-    project = _load_project(db, project_id, tenant_id)
+    project = _load_project(db, project_id, tenant_id, user_id)
     # Surface "template deleted" up front instead of letting the worker
     # find out 10 seconds in.
     db.query(TemplateProfileRow).filter(
@@ -260,8 +247,12 @@ def get_blueprint_job(
     project_id: str,
     job_id: str,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> BlueprintJob:
+    # Authorize via project ownership first so a user can't poll someone
+    # else's job by guessing the id.
+    _load_project(db, project_id, tenant_id, user_id)
     row = (
         db.query(BlueprintJobRow)
         .filter(
@@ -287,9 +278,10 @@ def get_blueprint_job(
 def get_latest_blueprint(
     project_id: str,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> Blueprint:
-    project = _load_project(db, project_id, tenant_id)
+    project = _load_project(db, project_id, tenant_id, user_id)
     row = (
         db.query(BlueprintRow)
         .filter(BlueprintRow.project_id == project.id)
@@ -306,6 +298,7 @@ def patch_blueprint_slide_mapping(
     project_id: str,
     body: SlideMappingPatch,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> Blueprint:
     """Update template_slide_index on individual blueprint slides.
@@ -314,7 +307,7 @@ def patch_blueprint_slide_mapping(
     Indices not present in the payload are left untouched. Updates the
     LATEST blueprint version in place — does not create a new revision.
     """
-    project = _load_project(db, project_id, tenant_id)
+    project = _load_project(db, project_id, tenant_id, user_id)
     row = (
         db.query(BlueprintRow)
         .filter(BlueprintRow.project_id == project.id)
@@ -354,6 +347,7 @@ def revise(
     project_id: str,
     body: RevisionCreate,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> RevisionJob:
     """Enqueue a revision job and return immediately.
@@ -370,7 +364,7 @@ def revise(
     worker's problem (5-min Lambda timeout, SQS at-least-once) and
     leaves the API request fast.
     """
-    project = _load_project(db, project_id, tenant_id)
+    project = _load_project(db, project_id, tenant_id, user_id)
     current = (
         db.query(BlueprintRow)
         .filter(BlueprintRow.project_id == project.id)
@@ -432,9 +426,10 @@ def get_revision_job(
     project_id: str,
     job_id: str,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> RevisionJob:
-    project = _load_project(db, project_id, tenant_id)
+    project = _load_project(db, project_id, tenant_id, user_id)
     job = (
         db.query(RevisionJobRow)
         .filter(
@@ -459,9 +454,10 @@ def get_revision_job(
 def render(
     project_id: str,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> RenderResponse:
-    project = _load_project(db, project_id, tenant_id)
+    project = _load_project(db, project_id, tenant_id, user_id)
     bp = (
         db.query(BlueprintRow)
         .filter(BlueprintRow.project_id == project.id)
@@ -515,9 +511,10 @@ def preview(
     project_id: str,
     slide_index: int,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> dict:
-    project = _load_project(db, project_id, tenant_id)
+    project = _load_project(db, project_id, tenant_id, user_id)
     bp = (
         db.query(BlueprintRow)
         .filter(BlueprintRow.project_id == project.id)
@@ -535,6 +532,7 @@ def preview(
 def list_previews(
     project_id: str,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> dict:
     """All slide preview URLs for the latest blueprint in one call.
@@ -542,7 +540,7 @@ def list_previews(
     Avoids N round trips from the UI gallery — the preview modal needs
     every slide's presigned URL at once.
     """
-    project = _load_project(db, project_id, tenant_id)
+    project = _load_project(db, project_id, tenant_id, user_id)
     bp = (
         db.query(BlueprintRow)
         .filter(BlueprintRow.project_id == project.id)
@@ -564,12 +562,13 @@ def list_previews(
 def export(
     project_id: str,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     format: str = "pptx",
     db: Session = Depends(get_session),
 ) -> dict:
     if format not in ("pptx", "pdf"):
         raise HTTPException(400, "format must be pptx or pdf")
-    project = _load_project(db, project_id, tenant_id)
+    project = _load_project(db, project_id, tenant_id, user_id)
     bp = (
         db.query(BlueprintRow)
         .filter(BlueprintRow.project_id == project.id)
@@ -584,15 +583,39 @@ def export(
     return {"format": format, "url": storage.presign_download(key)}
 
 
-def _load_project(db: Session, project_id: str, tenant_id: str) -> ProjectRow:
+def _load_project(
+    db: Session, project_id: str, tenant_id: str, user_id: str
+) -> ProjectRow:
+    # Same visibility rule as list_projects: owner OR legacy NULL.
+    # Returns 404 (not 403) on cross-user access so we don't leak the
+    # existence of someone else's project.
     row = (
         db.query(ProjectRow)
-        .filter(ProjectRow.id == project_id, ProjectRow.tenant_id == tenant_id)
+        .filter(
+            ProjectRow.id == project_id,
+            ProjectRow.tenant_id == tenant_id,
+            or_(
+                ProjectRow.owner_user_id == user_id,
+                ProjectRow.owner_user_id.is_(None),
+            ),
+        )
         .one_or_none()
     )
     if not row:
         raise HTTPException(404, "project not found")
     return row
+
+
+def _project_to_schema(row: ProjectRow) -> Project:
+    return Project(
+        id=row.id,
+        tenant_id=row.tenant_id,
+        owner_user_id=row.owner_user_id,
+        name=row.name,
+        template_id=row.template_id,
+        status=row.status,
+        created_at=row.created_at,
+    )
 
 
 def _next_version(db: Session, project_id: str) -> int:

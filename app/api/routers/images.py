@@ -12,9 +12,10 @@ import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from ..auth import require_tenant
+from ..auth import current_user_id, require_tenant
 from ..models.db import ImageAssetRow, ProjectRow, get_session
 from ..models.schemas import (
     ImageAsset,
@@ -38,6 +39,7 @@ def create_image_asset(
     project_id: str,
     body: ImageAssetCreateRequest,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> ImageAssetCreateResponse:
     """Allocate an image asset row and return a (placeholder) presigned POST.
@@ -45,7 +47,7 @@ def create_image_asset(
     The client uploads the bytes directly to S3, then calls /commit with
     the SHA-256 to mark the asset usable.
     """
-    _load_project(db, project_id, tenant_id)
+    _load_project(db, project_id, tenant_id, user_id)
 
     asset_id = str(uuid4())
     # Compute the S3 key once, up front, via the same helper the
@@ -91,6 +93,7 @@ def commit_image_asset(
     asset_id: str,
     body: ImageAssetCommitRequest,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> ImageAsset:
     """Mark an image asset committed by storing its SHA-256 checksum.
@@ -100,6 +103,7 @@ def commit_image_asset(
     We do NOT fetch the object to recompute its SHA-256 here — that's a
     follow-up: see TODO below.
     """
+    _load_project(db, project_id, tenant_id, user_id)
     row = _load_asset(db, project_id, asset_id, tenant_id)
 
     head = head_image_object(row.s3_key)
@@ -129,16 +133,30 @@ def get_image_asset(
     project_id: str,
     asset_id: str,
     tenant_id: str = Depends(require_tenant),
+    user_id: str = Depends(current_user_id),
     db: Session = Depends(get_session),
 ) -> ImageAsset:
+    _load_project(db, project_id, tenant_id, user_id)
     row = _load_asset(db, project_id, asset_id, tenant_id)
     return _to_schema(row)
 
 
-def _load_project(db: Session, project_id: str, tenant_id: str) -> ProjectRow:
+def _load_project(
+    db: Session, project_id: str, tenant_id: str, user_id: str
+) -> ProjectRow:
+    # Mirrors projects._load_project: visible to the owner, plus legacy
+    # NULL-owner rows. Image asset endpoints must enforce the same scope
+    # so a user can't attach images to someone else's project.
     row = (
         db.query(ProjectRow)
-        .filter(ProjectRow.id == project_id, ProjectRow.tenant_id == tenant_id)
+        .filter(
+            ProjectRow.id == project_id,
+            ProjectRow.tenant_id == tenant_id,
+            or_(
+                ProjectRow.owner_user_id == user_id,
+                ProjectRow.owner_user_id.is_(None),
+            ),
+        )
         .one_or_none()
     )
     if not row:

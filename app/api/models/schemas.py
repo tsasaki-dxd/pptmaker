@@ -69,6 +69,7 @@ class ProjectCreate(BaseModel):
 class Project(BaseModel):
     id: UUID
     tenant_id: str
+    owner_user_id: str | None = None
     name: str
     template_id: UUID
     status: str

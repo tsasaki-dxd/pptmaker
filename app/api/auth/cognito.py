@@ -109,3 +109,30 @@ def require_tenant(user: dict[str, Any] = Depends(current_user)) -> str:
     default tenant so they can see each other's work.
     """
     return user.get("custom:tenant_id") or user.get("tenant_id") or "default"
+
+
+def current_user_id(user: dict[str, Any] = Depends(current_user)) -> str:
+    """Cognito `sub` (immutable per-user UUID) for owner-scoped resources.
+
+    Used by the projects router to filter the project list per user.
+    Unlike `email`, `sub` never changes, so existing rows survive an
+    email-address change.
+    """
+    sub = user.get("sub")
+    if not sub:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "no user id in token")
+    return sub
+
+
+def require_admin(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+    """Restrict an endpoint to members of the Cognito `admin` group.
+
+    Currently used by template-deletion to keep destructive ops in the
+    hands of designated admins (e.g. tsasaki@dx-design.co.jp). Add users
+    to the group via Cognito console / CLI: aws cognito-idp
+    admin-add-user-to-group --group-name admin ...
+    """
+    groups = user.get("cognito:groups") or []
+    if "admin" not in groups:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "admin access required")
+    return user
