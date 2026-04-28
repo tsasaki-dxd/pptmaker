@@ -20,6 +20,7 @@ from . import (  # noqa: F401
     process_flow,
     pull_quote,
     pyramid,
+    scheme_diagram,
     spider_map,
     stack_bar,
     stat_callout,

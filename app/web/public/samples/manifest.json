@@ -1571,6 +1571,136 @@
     }
   },
   {
+    "id": "scheme_diagram_spc",
+    "figure_type": "scheme_diagram",
+    "title": "SPC スキーム図",
+    "prompt": "不動産 SPC を中心とした関係者間の契約 / 出資 / 配当の関係を一枚で",
+    "notes": "scheme_diagram — 中心 SPC + 左右にステークホルダー + groups で投資家/事業会社をクラスタ化。L字コネクタ。",
+    "image": "/samples/scheme_diagram/scheme_diagram_spc.png",
+    "spec": {
+      "figure_content": {
+        "actors": [
+          {
+            "id": "spc",
+            "label": "SPC",
+            "region": "center",
+            "primary": true,
+            "sub": "特別目的会社"
+          },
+          {
+            "id": "bank",
+            "label": "金融機関",
+            "region": "left"
+          },
+          {
+            "id": "lp",
+            "label": "投資家 LP",
+            "region": "left"
+          },
+          {
+            "id": "gp",
+            "label": "投資家 GP",
+            "region": "left"
+          },
+          {
+            "id": "dev",
+            "label": "デベロッパー",
+            "region": "right"
+          },
+          {
+            "id": "op",
+            "label": "運営会社",
+            "region": "right"
+          },
+          {
+            "id": "am",
+            "label": "アセットマネージャー",
+            "region": "top"
+          },
+          {
+            "id": "user",
+            "label": "エンドユーザー",
+            "region": "bottom"
+          }
+        ],
+        "groups": [
+          {
+            "name": "投資家",
+            "members": [
+              "lp",
+              "gp"
+            ],
+            "accent": "purple_lt"
+          },
+          {
+            "name": "事業会社",
+            "members": [
+              "dev",
+              "op"
+            ],
+            "accent": "amber"
+          }
+        ],
+        "flows": [
+          {
+            "from": "bank",
+            "to": "spc",
+            "label": "融資契約",
+            "kind": "contract"
+          },
+          {
+            "from": "spc",
+            "to": "bank",
+            "label": "返済",
+            "kind": "money"
+          },
+          {
+            "from": "lp",
+            "to": "spc",
+            "label": "出資",
+            "kind": "money"
+          },
+          {
+            "from": "spc",
+            "to": "lp",
+            "label": "配当",
+            "kind": "money"
+          },
+          {
+            "from": "gp",
+            "to": "spc",
+            "label": "出資 / 運営",
+            "kind": "money"
+          },
+          {
+            "from": "dev",
+            "to": "spc",
+            "label": "売買契約",
+            "kind": "contract"
+          },
+          {
+            "from": "spc",
+            "to": "op",
+            "label": "運営委託",
+            "kind": "contract"
+          },
+          {
+            "from": "user",
+            "to": "op",
+            "label": "対価",
+            "kind": "money"
+          },
+          {
+            "from": "am",
+            "to": "spc",
+            "label": "資産管理",
+            "kind": "info"
+          }
+        ]
+      }
+    }
+  },
+  {
     "id": "spider_map_dx",
     "figure_type": "spider_map",
     "title": "DX 推進の 4 領域",

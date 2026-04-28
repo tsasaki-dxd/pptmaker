@@ -41,6 +41,7 @@ FigureType = Literal[
     "value_flow",
     "value_chain",
     "business_canvas",
+    "scheme_diagram",
 ]
 
 
