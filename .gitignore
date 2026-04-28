@@ -50,5 +50,10 @@ build/
 poc_bundle/
 template_unpacked/
 
+# scripts/generate_samples.py transient unpacked-template workdir.
+# Cleaned up at the end of a full run; can be left behind if a partial
+# (single-sample) regen is interrupted.
+.samples_work/
+
 # Claude Code agent scratch (worktrees, transcripts)
 .claude/
