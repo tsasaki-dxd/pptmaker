@@ -6,6 +6,7 @@ Import side effects register each concrete renderer in the global REGISTRY.
 
 from . import (  # noqa: F401
     bullet_list,
+    business_canvas,
     cards_grid,
     comparison,
     cost_breakdown,
@@ -27,6 +28,8 @@ from . import (  # noqa: F401
     table,
     timeline,
     two_column,
+    value_chain,
+    value_flow,
     waterfall,
 )
 from .base import FigureRenderer

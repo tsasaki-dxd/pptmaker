@@ -81,6 +81,9 @@ export const FIGURE_TYPES = [
   'flowchart',
   'spider_map',
   'system_map',
+  'value_flow',
+  'value_chain',
+  'business_canvas',
 ] as const;
 export type FigureType = (typeof FIGURE_TYPES)[number];
 

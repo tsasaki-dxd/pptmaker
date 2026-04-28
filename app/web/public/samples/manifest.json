@@ -327,6 +327,59 @@
     }
   },
   {
+    "id": "business_canvas_saas",
+    "figure_type": "business_canvas",
+    "title": "ビジネスモデルキャンバス",
+    "prompt": "SaaS 事業のビジネスモデルキャンバス (9 ボックス)",
+    "notes": "business_canvas — Osterwalder 9 ボックスの定型レイアウト。",
+    "image": "/samples/business_canvas/business_canvas_saas.png",
+    "spec": {
+      "figure_content": {
+        "key_partners": [
+          "AWS",
+          "決済プロバイダ",
+          "OEM パートナー"
+        ],
+        "key_activities": [
+          "プラットフォーム開発",
+          "顧客サポート"
+        ],
+        "key_resources": [
+          "技術者チーム",
+          "顧客データ"
+        ],
+        "value_propositions": [
+          "短納期 (4週間)",
+          "投資回収 12ヶ月",
+          "国内 50社の実績"
+        ],
+        "customer_relationships": [
+          "CSM 専任",
+          "オンラインコミュニティ"
+        ],
+        "channels": [
+          "直販",
+          "代理店",
+          "Web セルフサーブ"
+        ],
+        "customer_segments": [
+          "中堅製造業",
+          "公共"
+        ],
+        "cost_structure": [
+          "人件費 60%",
+          "クラウド 20%",
+          "営業 15%"
+        ],
+        "revenue_streams": [
+          "月額サブスク",
+          "従量課金",
+          "コンサル"
+        ]
+      }
+    }
+  },
+  {
     "id": "cards_grid_features",
     "figure_type": "cards_grid",
     "title": "機能カード",
@@ -2038,6 +2091,93 @@
           "title": "アプローチ",
           "body": "段階的導入:\n1) 営業・財務データの統合\n2) BI ダッシュボード提供\n3) AI 予測モデル展開"
         }
+      }
+    }
+  },
+  {
+    "id": "value_chain_porter",
+    "figure_type": "value_chain",
+    "title": "バリューチェーン",
+    "prompt": "調達→製造→物流→販売→サービスの主活動と支援活動を Porter 型で",
+    "notes": "value_chain — シェブロン主活動 + 支援活動 + 末尾マージン三角。",
+    "image": "/samples/value_chain/value_chain_porter.png",
+    "spec": {
+      "figure_content": {
+        "primary": [
+          "調達",
+          "製造",
+          "物流",
+          "販売",
+          "サービス"
+        ],
+        "support": [
+          "技術開発",
+          "人事",
+          "経理"
+        ],
+        "margin_label": "利益"
+      }
+    }
+  },
+  {
+    "id": "value_flow_marketplace",
+    "figure_type": "value_flow",
+    "title": "マーケットプレイス商流",
+    "prompt": "顧客・自社プラットフォーム・出店者の 3 者間の商流 / 金流 / 情報流",
+    "notes": "value_flow — 3者間の双方向矢印 (色は kind: money/goods/info)。",
+    "image": "/samples/value_flow/value_flow_marketplace.png",
+    "spec": {
+      "figure_content": {
+        "actors": [
+          {
+            "id": "cust",
+            "label": "顧客",
+            "role": "個人 / 法人"
+          },
+          {
+            "id": "us",
+            "label": "自社",
+            "role": "プラットフォーム",
+            "primary": true
+          },
+          {
+            "id": "ptr",
+            "label": "出店者",
+            "role": "サプライヤ"
+          }
+        ],
+        "flows": [
+          {
+            "from": "cust",
+            "to": "us",
+            "label": "利用料",
+            "kind": "money"
+          },
+          {
+            "from": "us",
+            "to": "cust",
+            "label": "サービス提供",
+            "kind": "goods"
+          },
+          {
+            "from": "us",
+            "to": "ptr",
+            "label": "売上 (手数料控除後)",
+            "kind": "money"
+          },
+          {
+            "from": "ptr",
+            "to": "us",
+            "label": "在庫データ",
+            "kind": "info"
+          },
+          {
+            "from": "ptr",
+            "to": "cust",
+            "label": "商品配送",
+            "kind": "goods"
+          }
+        ]
       }
     }
   },
