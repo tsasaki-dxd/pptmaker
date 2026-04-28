@@ -975,11 +975,11 @@ SAMPLES: list[Sample] = [
         title="バリューチェーン",
         prompt="調達→製造→物流→販売→サービスの主活動と支援活動を Porter 型で",
         figure_content={
-            "primary": ["調達", "製造", "物流", "販売", "サービス"],
-            "support": ["技術開発", "人事", "経理"],
+            "primary": ["購買物流", "製造", "出荷物流", "販売・マーケ", "サービス"],
+            "support": ["企業インフラ", "人材管理", "技術開発", "調達"],
             "margin_label": "利益",
         },
-        notes="value_chain — シェブロン主活動 + 支援活動 + 末尾マージン三角。",
+        notes="value_chain — Porter 原典に近い 5 主活動 + 4 支援活動 + 末尾マージン。",
     ),
     Sample(
         id="business_canvas_saas",

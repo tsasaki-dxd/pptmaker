@@ -1,19 +1,19 @@
 """Porter-style value chain.
 
-Two stacked bands:
+Layout follows Porter's original diagram:
 
-  * **support** activities (0-4 items): plain rectangles strung
-    horizontally above the primary chain. Conventionally things like
-    "技術開発" / "人事" / "経理".
-  * **primary** activities (3-7 items): chevron-shaped boxes that
-    interlock left-to-right. Think 調達 → 製造 → 物流 → 販売 → サービス.
-  * Optional **margin_label** (e.g. "利益") gets a right-pointing
-    triangle on the far right cap.
+  ┌─────────────────────────────────────────────┐
+  │ Support 1                                    │
+  ├─────────────────────────────────────────────┤
+  │ Support 2          (vertically stacked)      │
+  ├─────────────────────────────────────────────┤
+  │ Support 3                                    │
+  └─────────────────────────────────────────────┘
+   > Primary 1 > Primary 2 > Primary 3 > … >|> 利益
+   (interlocking chevrons, all the brand color)
 
-This is intentionally narrower than process_flow — process_flow is
-"steps that follow each other", value chain is the specific
-business-strategy layout where supporting functions sit above the
-primary value chain.
+Distinct from process_flow, which is a flat strip of pills + arrows
+with no support panel and no margin cap.
 """
 
 from __future__ import annotations
@@ -28,6 +28,11 @@ _MIN_PRIMARY = 3
 _MAX_PRIMARY = 7
 _MAX_SUPPORT = 4
 
+# Indent/notch depth as a percentage of chevron width. 25% is a
+# common Porter-style proportion: deep enough to read as an arrow,
+# shallow enough that the next chevron has room for its label.
+_CHEVRON_INDENT_PCT = 25
+
 
 def _chevron(
     sp_id: int,
@@ -38,11 +43,22 @@ def _chevron(
     h: int,
     fill: str,
     *,
-    indent_pct: int = 50,
+    indent_pct: int = _CHEVRON_INDENT_PCT,
+    shadow: bool = True,
 ) -> str:
     """Right-pointing chevron (left side concave, right side convex).
     `indent_pct` 0..100 controls how deep the indent / point is."""
     indent = max(0, min(100, indent_pct))
+    effect = ""
+    if shadow:
+        effect = (
+            "<a:effectLst>"
+            '<a:outerShdw blurRad="50800" dist="25400" dir="5400000" '
+            'algn="t" rotWithShape="0">'
+            '<a:srgbClr val="000000"><a:alpha val="14000"/></a:srgbClr>'
+            "</a:outerShdw>"
+            "</a:effectLst>"
+        )
     return (
         f'<p:sp><p:nvSpPr><p:cNvPr id="{sp_id}" name="{_xml_escape(name)}"/>'
         f'<p:cNvSpPr/><p:nvPr/></p:nvSpPr>'
@@ -53,42 +69,7 @@ def _chevron(
         f'</a:prstGeom>'
         f'<a:solidFill><a:srgbClr val="{fill}"/></a:solidFill>'
         f'<a:ln><a:noFill/></a:ln>'
-        '<a:effectLst>'
-        '<a:outerShdw blurRad="50800" dist="25400" dir="5400000" '
-        'algn="t" rotWithShape="0">'
-        '<a:srgbClr val="000000"><a:alpha val="14000"/></a:srgbClr>'
-        '</a:outerShdw>'
-        '</a:effectLst>'
-        f"</p:spPr>"
-        f'<p:txBody><a:bodyPr wrap="square" anchor="ctr"/><a:lstStyle/><a:p/></p:txBody>'
-        f"</p:sp>"
-    )
-
-
-def _right_triangle(
-    sp_id: int,
-    name: str,
-    x: int,
-    y: int,
-    w: int,
-    h: int,
-    fill: str,
-) -> str:
-    """Right-pointing triangle for the margin cap."""
-    return (
-        f'<p:sp><p:nvSpPr><p:cNvPr id="{sp_id}" name="{_xml_escape(name)}"/>'
-        f'<p:cNvSpPr/><p:nvPr/></p:nvSpPr>'
-        f'<p:spPr>'
-        f'<a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{w}" cy="{h}"/></a:xfrm>'
-        f'<a:prstGeom prst="rtTriangle"><a:avLst/></a:prstGeom>'
-        f'<a:solidFill><a:srgbClr val="{fill}"/></a:solidFill>'
-        f'<a:ln><a:noFill/></a:ln>'
-        '<a:effectLst>'
-        '<a:outerShdw blurRad="50800" dist="25400" dir="5400000" '
-        'algn="t" rotWithShape="0">'
-        '<a:srgbClr val="000000"><a:alpha val="14000"/></a:srgbClr>'
-        '</a:outerShdw>'
-        '</a:effectLst>'
+        f"{effect}"
         f"</p:spPr>"
         f'<p:txBody><a:bodyPr wrap="square" anchor="ctr"/><a:lstStyle/><a:p/></p:txBody>'
         f"</p:sp>"
@@ -97,19 +78,20 @@ def _right_triangle(
 
 @register
 class ValueChainRenderer(FigureRenderer):
-    """Porter value chain — primary chevrons + optional support row + margin cap."""
+    """Porter value chain — primary chevrons + optional support stack + margin cap."""
 
     figure_type = "value_chain"
     description = (
         "Porter-style value chain. Primary activities (3-7) render as "
-        "interlocking chevrons; optional support activities (0-4) sit as "
-        "plain boxes above them; an optional margin_label adds a "
-        "right-pointing triangle at the end. "
+        "interlocking chevrons in a single brand color; optional "
+        "support activities (0-4) stack vertically above as horizontal "
+        "bands; an optional margin_label adds a same-height chevron "
+        "cap (in amber) right after the last primary. "
         "content: {primary: [str, ...], support?: [str, ...], margin_label?: str}"
     )
     input_schema_example: ClassVar[dict[str, Any]] = {
         "primary": ["調達", "製造", "物流", "販売", "サービス"],
-        "support": ["技術開発", "人事", "経理"],
+        "support": ["企業インフラ", "人材管理", "技術開発"],
         "margin_label": "利益",
     }
 
@@ -121,8 +103,8 @@ class ValueChainRenderer(FigureRenderer):
                 f"primary must be list of length {_MIN_PRIMARY}-{_MAX_PRIMARY}"
             )
         else:
-            for i, p in enumerate(primary):
-                if not isinstance(p, str) or not p.strip():
+            for i, pr in enumerate(primary):
+                if not isinstance(pr, str) or not pr.strip():
                     errors.append(f"primary[{i}] must be non-empty string")
         support = content.get("support")
         if support is not None:
@@ -151,54 +133,78 @@ class ValueChainRenderer(FigureRenderer):
         canvas_w = container.w
         canvas_h = container.h
 
-        # Vertical split: top band for support (if any), bottom band
-        # for primary chain. When support is empty, give all height to
-        # primary so the chevrons don't look anaemic.
+        # ---- vertical band split ----
+        # Support stack on top (sized to fit support row count), primary
+        # chevron strip below. Gap between the two so the strip reads
+        # as a separate component.
         if support:
-            support_h = _i(canvas_h * 0.28)
+            # ~70px per support band — looks substantive enough that
+            # they don't read as razor-thin filler.
+            band_h = max(_i(canvas_h * 0.075), 220000)
+            support_h = band_h * len(support) + max(_i(canvas_h * 0.012), 18000) * (
+                len(support) - 1
+            )
+            support_h = min(support_h, _i(canvas_h * 0.45))
             gap_v = _i(canvas_h * 0.05)
         else:
+            band_h = 0
             support_h = 0
             gap_v = 0
         primary_h = canvas_h - support_h - gap_v
 
-        # ---- support row -------------------------------------------
         sid = ctx.next_shape_id
         shapes: list[str] = []
 
+        # ---- support: single panel with stacked horizontal bands ----
         if support:
-            n_s = len(support)
-            cell_gap = canvas_w // 80
-            cell_w = (canvas_w - cell_gap * (n_s - 1)) // n_s
-            for i, label in enumerate(support):
-                cx = container.x + i * (cell_w + cell_gap)
-                cy = container.y
-                shapes.append(
-                    round_rect_shape(
-                        sid,
-                        f"vc-sup-{i}",
-                        cx,
-                        cy,
-                        cell_w,
-                        support_h,
-                        "FFFFFF",
-                        corner_radius_pct=8,
-                        shadow=True,
-                    )
+            panel_x = container.x
+            panel_y = container.y
+            panel_w = canvas_w
+            shapes.append(
+                round_rect_shape(
+                    sid,
+                    "vc-support-panel",
+                    panel_x,
+                    panel_y,
+                    panel_w,
+                    support_h,
+                    "FFFFFF",
+                    corner_radius_pct=4,
+                    shadow=True,
                 )
-                sid += 1
-                # Thin colored top strip for visual coding (muted) so
-                # support reads as "secondary" vs primary chevrons.
-                strip_h = max(_i(canvas_h * 0.012), 18000)
+            )
+            sid += 1
+
+            # Each support band: full-width row with bottom divider.
+            actual_band_h = support_h // len(support)
+            for i, label in enumerate(support):
+                by = panel_y + i * actual_band_h
+                # Subtle row tint so support reads as one panel with
+                # internal divisions instead of one flat block.
+                if i % 2 == 1:
+                    shapes.append(
+                        rect_shape(
+                            sid,
+                            f"vc-sup-bg-{i}",
+                            panel_x + 12000,
+                            by,
+                            panel_w - 24000,
+                            actual_band_h,
+                            "F8F6FB",
+                        )
+                    )
+                    sid += 1
+                # Left accent bar to align with primary's purple.
+                accent_w = max(_i(0.06 * 914400), 48000)
                 shapes.append(
                     rect_shape(
                         sid,
-                        f"vc-sup-strip-{i}",
-                        cx,
-                        cy,
-                        cell_w,
-                        strip_h,
-                        p.muted,
+                        f"vc-sup-acc-{i}",
+                        panel_x,
+                        by,
+                        accent_w,
+                        actual_band_h,
+                        p.purple_lt,
                     )
                 )
                 sid += 1
@@ -206,58 +212,73 @@ class ValueChainRenderer(FigureRenderer):
                     text_box(
                         sid,
                         f"vc-sup-lbl-{i}",
-                        cx + 60000,
-                        cy + strip_h + 30000,
-                        cell_w - 120000,
-                        support_h - strip_h - 60000,
+                        panel_x + accent_w + 80000,
+                        by,
+                        panel_w - accent_w - 160000,
+                        actual_band_h,
                         label,
                         size_pt=11,
                         bold=True,
                         color=p.dark,
                         font=ctx.font,
-                        align="ctr",
+                        align="l",
                     )
                 )
                 sid += 1
+                # Bottom divider (skip the last row).
+                if i < len(support) - 1:
+                    shapes.append(
+                        rect_shape(
+                            sid,
+                            f"vc-sup-div-{i}",
+                            panel_x + accent_w + 40000,
+                            by + actual_band_h - 4000,
+                            panel_w - accent_w - 80000,
+                            8000,
+                            p.border,
+                        )
+                    )
+                    sid += 1
 
-        # ---- primary chevron chain ----------------------------------
+        # ---- primary chevrons + optional margin cap ----
         primary_y = container.y + support_h + gap_v
+        # Vertically center the chevron strip a touch shorter than the
+        # full primary band so its shadow has room to breathe.
+        chev_h = max(_i(primary_h * 0.78), 600000)
+        chev_y = primary_y + (primary_h - chev_h) // 2
+
         n_p = len(primary)
-
-        # Reserve a small slice on the right for the margin cap when present.
-        if margin_label:
-            margin_w = _i(canvas_w * 0.07)
-            margin_gap = _i(canvas_w * 0.005)
+        # Spacing math: each chevron is `box_w` wide, but the next one
+        # nestles into its right tip by `indent_emu`. So the per-step
+        # advance is `(box_w - indent_emu)` and the very last chevron
+        # contributes its full box_w. With an optional margin chevron
+        # of equal height, that adds another (box_w - indent_emu) for
+        # its overlap into the chain plus margin_w for its visible
+        # extent.
+        margin_present = bool(margin_label)
+        # Rough sizing first pass — assume margin chevron is the same
+        # box_w as primary; we'll back the math out from total width.
+        if margin_present:
+            # n_p primary + 1 margin chevron interlocked
+            denom = (n_p + 1) - n_p * (_CHEVRON_INDENT_PCT / 100.0)
         else:
-            margin_w = 0
-            margin_gap = 0
-        chain_w = canvas_w - margin_w - margin_gap
-
-        # Chevrons interlock — make them slightly overlap by the indent
-        # depth so the convex tip of one fits into the concave of the
-        # next, like Porter's classic diagram.
-        indent_pct = 35
-        # Each chevron's effective body width minus indent should make
-        # the row sum to chain_w. Approximate: total = n*box_w - (n-1)*overlap.
-        box_w = chain_w // n_p
-        # Slight visual overlap (~15% of box_w) for the interlocking look.
-        overlap = box_w // 7
-
-        # Cycle accent colors so adjacent chevrons read distinctly.
-        accents = [p.purple_dk, p.purple_lt, p.amber, p.green, p.purple, p.muted, p.purple_dk]
+            denom = n_p - (n_p - 1) * (_CHEVRON_INDENT_PCT / 100.0)
+        box_w = int(canvas_w / denom)
+        indent_emu = int(box_w * _CHEVRON_INDENT_PCT / 100)
+        step = box_w - indent_emu
 
         for i, label in enumerate(primary):
-            cx = container.x + i * (box_w - overlap)
+            cx = container.x + i * step
             shapes.append(
                 _chevron(
                     sid,
                     f"vc-pri-{i}",
                     cx,
-                    primary_y,
+                    chev_y,
                     box_w,
-                    primary_h,
-                    accents[i % len(accents)],
-                    indent_pct=indent_pct,
+                    chev_h,
+                    p.purple_dk,
+                    indent_pct=_CHEVRON_INDENT_PCT,
                 )
             )
             sid += 1
@@ -267,10 +288,10 @@ class ValueChainRenderer(FigureRenderer):
                 text_box(
                     sid,
                     f"vc-pri-lbl-{i}",
-                    cx + box_w // 6,
-                    primary_y + 40000,
-                    box_w * 2 // 3,
-                    primary_h - 80000,
+                    cx + indent_emu,
+                    chev_y + 40000,
+                    box_w - 2 * indent_emu,
+                    chev_h - 80000,
                     label,
                     size_pt=12,
                     bold=True,
@@ -282,38 +303,34 @@ class ValueChainRenderer(FigureRenderer):
             )
             sid += 1
 
-        # ---- margin cap ---------------------------------------------
-        # rtTriangle is widest on its LEFT edge and narrows to a point
-        # on the right. Center-aligning text in the bounding box makes
-        # it spill past the visible triangle and clip; pin the label
-        # to the left half (where the triangle still has area to
-        # contain text).
-        if margin_label:
-            mx = container.x + canvas_w - margin_w
-            my = primary_y
+        # Margin chevron — same shape as the primary ones so it reads
+        # as the natural end of the chain. Amber so it stands out as
+        # the "result" the chain produces.
+        if margin_present:
+            mx = container.x + n_p * step
             shapes.append(
-                _right_triangle(
+                _chevron(
                     sid,
                     "vc-margin",
                     mx,
-                    my,
-                    margin_w,
-                    primary_h,
+                    chev_y,
+                    box_w,
+                    chev_h,
                     p.amber,
+                    indent_pct=_CHEVRON_INDENT_PCT,
                 )
             )
             sid += 1
-            label_w = margin_w // 2
             shapes.append(
                 text_box(
                     sid,
                     "vc-margin-lbl",
-                    mx + 20000,
-                    my + primary_h // 3,
-                    label_w,
-                    primary_h // 3,
+                    mx + indent_emu,
+                    chev_y + 40000,
+                    box_w - 2 * indent_emu,
+                    chev_h - 80000,
                     margin_label,
-                    size_pt=10,
+                    size_pt=12,
                     bold=True,
                     color="FFFFFF",
                     font=ctx.font,
