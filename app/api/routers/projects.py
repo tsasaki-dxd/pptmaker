@@ -14,6 +14,7 @@ from ..models.db import (
     BlueprintRow,
     OutputRow,
     ProjectRow,
+    RevisionJobRow,
     RevisionRow,
     TemplateProfileRow,
     get_session,
@@ -25,14 +26,12 @@ from ..models.schemas import (
     Project,
     ProjectCreate,
     RenderResponse,
-    Revision,
     RevisionCreate,
+    RevisionJob,
     SlideMappingPatch,
     SlideSpec,
 )
-from ..services.llm import LLMClient
-from ..services.queue import BlueprintQueue, RenderQueue
-from ..services.revision_handler import RevisionError, apply_instruction
+from ..services.queue import BlueprintQueue, RenderQueue, RevisionQueue
 from ..services.storage import Storage, download_bytes
 from ..services.template_registry import ensure_slots_populated
 
@@ -346,13 +345,31 @@ def patch_blueprint_slide_mapping(
     return _to_schema(row)
 
 
-@router.post("/{project_id}/revise", response_model=Revision)
+@router.post(
+    "/{project_id}/revise",
+    response_model=RevisionJob,
+    status_code=202,
+)
 def revise(
     project_id: str,
     body: RevisionCreate,
     tenant_id: str = Depends(require_tenant),
     db: Session = Depends(get_session),
-) -> Revision:
+) -> RevisionJob:
+    """Enqueue a revision job and return immediately.
+
+    The actual LLM call + JSON-Patch application + DB write happens in
+    the revision_worker Lambda. The client polls
+    GET /api/projects/{id}/revise/job/{job_id} until status flips off
+    "pending" then re-fetches the blueprint.
+
+    Inline-LLM was the previous shape but the call routinely exceeded
+    API Gateway's 29s integration timeout, leading to 503/400/500
+    cascades while the Lambda silently kept committing revisions in
+    the background. The async path makes the latency budget the
+    worker's problem (5-min Lambda timeout, SQS at-least-once) and
+    leaves the API request fast.
+    """
     project = _load_project(db, project_id, tenant_id)
     current = (
         db.query(BlueprintRow)
@@ -363,8 +380,10 @@ def revise(
     if not current:
         raise HTTPException(400, "no existing blueprint")
 
-    # Validate slide_index against the current blueprint before spending
-    # an LLM call; caller passed an out-of-range index, fail fast.
+    # Cheap range check up front so we don't enqueue a job that's
+    # guaranteed to fail. The worker re-checks against the latest
+    # version because another revision could land between submit and
+    # pickup.
     if body.slide_index is not None and (
         body.slide_index < 1 or body.slide_index > len(current.slides)
     ):
@@ -373,42 +392,66 @@ def revise(
             f"slide_index {body.slide_index} out of range (1..{len(current.slides)})",
         )
 
-    llm = LLMClient()
-    try:
-        patch, new_slides_obj = apply_instruction(
-            llm,
-            {"title": current.title, "slides": current.slides},
-            body.instruction,
-            slide_index=body.slide_index,
-        )
-    except RevisionError as e:
-        raise HTTPException(400, str(e)) from e
-
-    new_row = BlueprintRow(
-        id=str(uuid4()),
+    job_id = str(uuid4())
+    job_row = RevisionJobRow(
+        id=job_id,
         project_id=project.id,
-        version=current.version + 1,
-        title=new_slides_obj.get("title", current.title),
-        slides=new_slides_obj.get("slides", current.slides),
-    )
-    rev = RevisionRow(
-        id=str(uuid4()),
-        blueprint_id=new_row.id,
+        tenant_id=tenant_id,
         instruction=body.instruction,
-        patch=patch,
-        applied=1,
+        slide_index=body.slide_index,
+        status="pending",
     )
-    db.add_all([new_row, rev])
+    db.add(job_row)
     db.commit()
-    db.refresh(rev)
+    db.refresh(job_row)
 
-    return Revision(
-        id=rev.id,
-        blueprint_id=rev.blueprint_id,
-        instruction=rev.instruction,
-        patch=rev.patch,
-        applied=bool(rev.applied),
-        created_at=rev.created_at,
+    queue = RevisionQueue()
+    queue.submit(
+        {
+            "job_id": job_id,
+            "project_id": str(project.id),
+            "tenant_id": tenant_id,
+        }
+    )
+
+    return RevisionJob(
+        job_id=job_row.id,
+        project_id=job_row.project_id,
+        status=job_row.status,
+        blueprint_id=job_row.blueprint_id,
+        error=job_row.error_message,
+        created_at=job_row.created_at,
+    )
+
+
+@router.get(
+    "/{project_id}/revise/job/{job_id}",
+    response_model=RevisionJob,
+)
+def get_revision_job(
+    project_id: str,
+    job_id: str,
+    tenant_id: str = Depends(require_tenant),
+    db: Session = Depends(get_session),
+) -> RevisionJob:
+    project = _load_project(db, project_id, tenant_id)
+    job = (
+        db.query(RevisionJobRow)
+        .filter(
+            RevisionJobRow.id == job_id,
+            RevisionJobRow.project_id == project.id,
+        )
+        .one_or_none()
+    )
+    if job is None:
+        raise HTTPException(404, "revision job not found")
+    return RevisionJob(
+        job_id=job.id,
+        project_id=job.project_id,
+        status=job.status,
+        blueprint_id=job.blueprint_id,
+        error=job.error_message,
+        created_at=job.created_at,
     )
 
 

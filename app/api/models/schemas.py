@@ -170,6 +170,22 @@ class Revision(BaseModel):
     created_at: datetime
 
 
+RevisionJobStatus = Literal["pending", "complete", "failed"]
+
+
+class RevisionJob(BaseModel):
+    """Async-revision tracker. Mirrors BlueprintJob but for the
+    revision pipeline: client polls until status flips off "pending"
+    then re-fetches the blueprint."""
+
+    job_id: UUID
+    project_id: UUID
+    status: RevisionJobStatus
+    blueprint_id: UUID | None = None
+    error: str | None = None
+    created_at: datetime | None = None
+
+
 class RenderRequest(BaseModel):
     blueprint_id: UUID
 

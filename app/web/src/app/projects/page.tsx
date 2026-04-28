@@ -208,17 +208,49 @@ function ProjectsPageInner() {
     }
   }
 
+  // Submit a revision and poll until the worker finishes. Throws if
+  // the job ends in "failed" so callers can short-circuit downstream
+  // steps (e.g. don't kick a re-render after a failed revise).
+  async function submitAndPollRevise(
+    slideIndex: number | undefined,
+    instruction: string,
+  ): Promise<void> {
+    if (!project) throw new Error('no active project');
+    const job = await api.revise(project.id, instruction, slideIndex);
+    push(`修正ジョブ投入: job_id=${job.job_id}`);
+    const startedAt = Date.now();
+    // 5 min ceiling matches the revision_worker Lambda timeout.
+    const intervalMs = 2000;
+    const maxAttempts = 150;
+    for (let i = 0; i < maxAttempts; i++) {
+      const j = await api.getRevisionJob(project.id, job.job_id);
+      if (j.status === 'complete') {
+        push(`修正完了 (job_id=${job.job_id})`);
+        return;
+      }
+      if (j.status === 'failed') {
+        throw new Error(`修正失敗: ${j.error ?? '(詳細不明)'}`);
+      }
+      if (i > 0 && i % 5 === 0) {
+        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+        setLog((prev) => [...prev.slice(0, -1), `修正 polling... (${elapsed}s / 300s)`]);
+      }
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    throw new Error('修正ジョブがタイムアウトしました (5 分)');
+  }
+
   async function handleRevise(slideIndex?: number) {
     if (!project || !revisionText.trim()) return;
     setBusy(true);
     try {
       const scope = slideIndex ? `スライド#${slideIndex}` : '全体';
       push(`修正指示送信 (${scope}): "${revisionText}"`);
-      await api.revise(project.id, revisionText, slideIndex);
+      await submitAndPollRevise(slideIndex, revisionText);
       const bp = await api.getBlueprint(project.id);
       setBlueprint(bp);
       setRevisionText('');
-      push(`修正完了: v${bp.version}`);
+      push(`Blueprint 取得: v${bp.version}`);
     } catch (e) {
       push(`修正失敗: ${String(e)}`);
     } finally {
@@ -231,10 +263,10 @@ function ProjectsPageInner() {
     setBusy(true);
     try {
       push(`スライド#${slideIndex} 修正指示: "${instruction}"`);
-      await api.revise(project.id, instruction, slideIndex);
+      await submitAndPollRevise(slideIndex, instruction);
       const bp = await api.getBlueprint(project.id);
       setBlueprint(bp);
-      push(`修正完了: v${bp.version}`);
+      push(`Blueprint 取得: v${bp.version}`);
     } catch (e) {
       push(`修正失敗: ${String(e)}`);
     } finally {
@@ -301,10 +333,10 @@ function ProjectsPageInner() {
     try {
       const scope = slideIndex ? `スライド#${slideIndex}` : '全体';
       push(`(step3) 修正指示送信 (${scope}): "${instruction}"`);
-      await api.revise(project.id, instruction, slideIndex ?? undefined);
+      await submitAndPollRevise(slideIndex ?? undefined, instruction);
       const bp = await api.getBlueprint(project.id);
       setBlueprint(bp);
-      push(`修正完了: v${bp.version}`);
+      push(`Blueprint 取得: v${bp.version}`);
 
       setStep('rendering');
       push('再レンダリング投入...');

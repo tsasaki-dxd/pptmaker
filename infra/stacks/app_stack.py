@@ -289,6 +289,26 @@ class AppStack(cdk.Stack):
             dead_letter_queue=sqs.DeadLetterQueue(max_receive_count=2, queue=blueprint_dlq),
         )
 
+        # Revision queue: same idea as blueprint_queue but for the
+        # /revise endpoint. Inline /revise used to run the LLM call on
+        # the request thread which routinely tripped API Gateway's 29s
+        # integration timeout while the Lambda kept committing in the
+        # background — clients saw 503/400/500 cascades. Moving it
+        # off-thread fixes that and gives the worker a 5-minute budget.
+        revision_dlq = sqs.Queue(
+            self,
+            "RevisionDlq",
+            queue_name=f"slideforge-{stage_name}-revision-dlq",
+            retention_period=cdk.Duration.days(14),
+        )
+        self.revision_queue = sqs.Queue(
+            self,
+            "RevisionQueue",
+            queue_name=f"slideforge-{stage_name}-revision",
+            visibility_timeout=cdk.Duration.minutes(6),
+            dead_letter_queue=sqs.DeadLetterQueue(max_receive_count=2, queue=revision_dlq),
+        )
+
         # Render Lambda needs DB access so it can flip
         # ProjectRow.status to "complete"/"failed" when a job finishes —
         # otherwise the UI has no way to know when to enable the
@@ -358,6 +378,7 @@ class AppStack(cdk.Stack):
         anthropic_secret.grant_read(api_role)
         self.render_queue.grant_send_messages(api_role)
         self.blueprint_queue.grant_send_messages(api_role)
+        self.revision_queue.grant_send_messages(api_role)
 
         self.api_function = lambda_.Function(
             self,
@@ -406,6 +427,7 @@ class AppStack(cdk.Stack):
                 "DB_ENDPOINT": self.db.instance_endpoint.hostname,
                 "RENDER_QUEUE_URL": self.render_queue.queue_url,
                 "BLUEPRINT_QUEUE_URL": self.blueprint_queue.queue_url,
+                "REVISION_QUEUE_URL": self.revision_queue.queue_url,
                 # Phase 2 blueprint quality: require headline_message on
                 # every SlideSpec. Must match the worker's setting so
                 # blueprints written with a placeholder also load back.
@@ -486,6 +508,65 @@ class AppStack(cdk.Stack):
         )
         self.blueprint_worker_function.add_event_source(
             lambda_events.SqsEventSource(self.blueprint_queue, batch_size=1)
+        )
+
+        # Revision worker Lambda. Same code bundle as the API +
+        # blueprint workers (api/ + render/ at the package root); only
+        # the handler entry point and SQS source differ.
+        revision_worker_role = iam.Role(
+            self,
+            "RevisionWorkerRole",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "service-role/AWSLambdaVPCAccessExecutionRole"
+                )
+            ],
+        )
+        self.db_secret.grant_read(revision_worker_role)
+        anthropic_secret.grant_read(revision_worker_role)
+        self.revision_queue.grant_consume_messages(revision_worker_role)
+
+        self.revision_worker_function = lambda_.Function(
+            self,
+            "RevisionWorkerFunction",
+            function_name=f"slideforge-{stage_name}-revision-worker",
+            runtime=lambda_.Runtime.PYTHON_3_12,
+            handler="api.revision_worker.handler",
+            code=lambda_.Code.from_asset(
+                str(REPO_ROOT / "app"),
+                bundling=cdk.BundlingOptions(
+                    image=lambda_.Runtime.PYTHON_3_12.bundling_image,
+                    command=[
+                        "bash",
+                        "-c",
+                        "pip install --no-cache-dir -r api/requirements.txt -t /asset-output "
+                        "&& mkdir -p /asset-output/api /asset-output/render "
+                        "&& cp -r api/. /asset-output/api/ "
+                        "&& cp -r render/. /asset-output/render/",
+                    ],
+                ),
+            ),
+            memory_size=1024,
+            timeout=cdk.Duration.minutes(5),
+            role=revision_worker_role,
+            vpc=self.vpc,
+            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS),
+            security_groups=[lambda_sg],
+            environment={
+                "ENV": stage_name,
+                "S3_BUCKET": self.artifacts_bucket.bucket_name,
+                "DB_SECRET_ARN": self.db_secret.secret_arn,
+                "DB_ENDPOINT": self.db.instance_endpoint.hostname,
+                "ANTHROPIC_API_KEY_SECRET": anthropic_secret.secret_name,
+                # Same flag set as the API + blueprint workers so a
+                # blueprint mutated here deserializes cleanly when the
+                # API Lambda reads it back.
+                "FF_HEADLINE_REQUIRED": "1",
+            },
+        )
+        self.revision_worker_function.add_event_source(
+            lambda_events.SqsEventSource(self.revision_queue, batch_size=1)
         )
 
         # CORS handled at the API Gateway level, not the Lambda. Two reasons:

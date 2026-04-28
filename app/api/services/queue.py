@@ -45,3 +45,20 @@ class BlueprintQueue:
             MessageBody=json.dumps(job, ensure_ascii=False),
         )
         return resp["MessageId"]
+
+
+class RevisionQueue:
+    def __init__(self) -> None:
+        self.settings = get_settings()
+        self.sqs = boto3.client("sqs", region_name=self.settings.aws_region)
+        self.queue_url = os.environ.get("REVISION_QUEUE_URL", "")
+
+    def submit(self, job: dict[str, Any]) -> str:
+        if not self.queue_url:
+            log.warning("revision queue URL not configured; job not submitted")
+            return ""
+        resp = self.sqs.send_message(
+            QueueUrl=self.queue_url,
+            MessageBody=json.dumps(job, ensure_ascii=False),
+        )
+        return resp["MessageId"]
