@@ -9,6 +9,11 @@ Auto-routing arbitrary 2D graphs is intentionally out of scope —
 forcing layered input lets the renderer produce predictable output
 without depending on a graph-layout library inside the Lambda
 bundle. The LLM is responsible for picking the layer assignment.
+
+Visual: flat cards with subtle drop shadow + colored left accent
+bar coding the kind. Avoids the heavy purple borders of the first
+pass — modern slides read better with whitespace and one accent
+color per element instead of a frame around everything.
 """
 
 from __future__ import annotations
@@ -26,8 +31,26 @@ _NODE_KINDS = {"start", "end", "process", "decision", "data"}
 
 
 def _diamond(
-    sp_id: int, name: str, x: int, y: int, w: int, h: int, fill: str, line_color: str
+    sp_id: int,
+    name: str,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    fill: str,
+    *,
+    shadow: bool = True,
 ) -> str:
+    effect = ""
+    if shadow:
+        effect = (
+            "<a:effectLst>"
+            '<a:outerShdw blurRad="50800" dist="25400" dir="5400000" '
+            'algn="t" rotWithShape="0">'
+            '<a:srgbClr val="000000"><a:alpha val="14000"/></a:srgbClr>'
+            "</a:outerShdw>"
+            "</a:effectLst>"
+        )
     return (
         f'<p:sp><p:nvSpPr><p:cNvPr id="{sp_id}" name="{_xml_escape(name)}"/>'
         f'<p:cNvSpPr/><p:nvPr/></p:nvSpPr>'
@@ -35,7 +58,8 @@ def _diamond(
         f'<a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{w}" cy="{h}"/></a:xfrm>'
         f'<a:prstGeom prst="diamond"><a:avLst/></a:prstGeom>'
         f'<a:solidFill><a:srgbClr val="{fill}"/></a:solidFill>'
-        f'<a:ln w="6350"><a:solidFill><a:srgbClr val="{line_color}"/></a:solidFill></a:ln>'
+        f'<a:ln><a:noFill/></a:ln>'
+        f"{effect}"
         f"</p:spPr>"
         f'<p:txBody><a:bodyPr wrap="square" anchor="ctr"/><a:lstStyle/><a:p/></p:txBody>'
         f"</p:sp>"
@@ -43,7 +67,13 @@ def _diamond(
 
 
 def _parallelogram(
-    sp_id: int, name: str, x: int, y: int, w: int, h: int, fill: str, line_color: str
+    sp_id: int,
+    name: str,
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+    fill: str,
 ) -> str:
     return (
         f'<p:sp><p:nvSpPr><p:cNvPr id="{sp_id}" name="{_xml_escape(name)}"/>'
@@ -52,7 +82,13 @@ def _parallelogram(
         f'<a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{w}" cy="{h}"/></a:xfrm>'
         f'<a:prstGeom prst="parallelogram"><a:avLst/></a:prstGeom>'
         f'<a:solidFill><a:srgbClr val="{fill}"/></a:solidFill>'
-        f'<a:ln w="6350"><a:solidFill><a:srgbClr val="{line_color}"/></a:solidFill></a:ln>'
+        f'<a:ln><a:noFill/></a:ln>'
+        "<a:effectLst>"
+        '<a:outerShdw blurRad="50800" dist="25400" dir="5400000" '
+        'algn="t" rotWithShape="0">'
+        '<a:srgbClr val="000000"><a:alpha val="14000"/></a:srgbClr>'
+        "</a:outerShdw>"
+        "</a:effectLst>"
         f"</p:spPr>"
         f'<p:txBody><a:bodyPr wrap="square" anchor="ctr"/><a:lstStyle/><a:p/></p:txBody>'
         f"</p:sp>"
@@ -67,7 +103,7 @@ def _arrow(
     x2: int,
     y2: int,
     color: str,
-    width_emu: int = 12700,
+    width_emu: int = 9525,
 ) -> str:
     """Connector with a triangle tail-end (arrow head at (x2, y2))."""
     bx, by = min(x1, x2), min(y1, y2)
@@ -85,7 +121,7 @@ def _arrow(
         f'<a:prstGeom prst="line"><a:avLst/></a:prstGeom>'
         f'<a:ln w="{width_emu}">'
         f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
-        f'<a:tailEnd type="triangle" w="med" len="med"/>'
+        f'<a:tailEnd type="triangle" w="sm" len="sm"/>'
         f"</a:ln>"
         f"</p:spPr>"
         f"</p:cxnSp>"
@@ -181,8 +217,6 @@ class FlowchartRenderer(FigureRenderer):
         edges: list[dict[str, Any]] = list(content.get("edges") or [])
 
         n_layers = len(layers)
-        # Reserve a tight horizontal margin so the diamond on a wide
-        # decision row doesn't crash into the canvas edge.
         margin_x = container.w // 50
         margin_y = container.h // 40
 
@@ -192,14 +226,14 @@ class FlowchartRenderer(FigureRenderer):
         plot_h = container.h - 2 * margin_y
 
         layer_h = plot_h // n_layers
-        # Keep nodes tighter than the layer band so arrows have room.
-        node_h = max(_i(layer_h * 0.55), 240000)
+        # Looser node sizing: shorter cards leave room for breathing space
+        # between layers and for the arrows to be visually obvious.
+        node_h = max(_i(layer_h * 0.50), 280000)
         node_v_pad = (layer_h - node_h) // 2
 
-        # Each node's center for arrow routing.
+        accent_w = max(_i(0.05 * 914400), 36000)  # ~3pt left bar.
+
         centers: dict[str, tuple[int, int]] = {}
-        # Each node's bbox (x, y, w, h) so the arrow start/end can
-        # connect to the right edge instead of the center.
         bboxes: dict[str, tuple[int, int, int, int]] = {}
 
         shapes: list[str] = []
@@ -208,27 +242,40 @@ class FlowchartRenderer(FigureRenderer):
         for li, layer in enumerate(layers):
             n = len(layer)
             slot_w = plot_w // n
-            node_w = max(_i(slot_w * 0.85), 600000)
+            node_w = max(_i(slot_w * 0.88), 700000)
             for ni, node in enumerate(layer):
                 kind = node.get("kind", "process")
                 slot_x = plot_x + ni * slot_w + (slot_w - node_w) // 2
                 node_y = plot_y + li * layer_h + node_v_pad
-                # Diamond visually feels smaller than its bounding box;
-                # widen so the inscribed text rectangle has room.
+
+                # Diamond keeps its own (wider) bounding box so its
+                # inscribed text rectangle has room.
                 if kind == "decision":
-                    diamond_w = min(node_w, _i(node_h * 1.6))
+                    diamond_w = min(node_w, _i(node_h * 1.7))
                     slot_x += (node_w - diamond_w) // 2
                     used_w = diamond_w
                 else:
                     used_w = node_w
 
-                fill = p.purple_lt
+                # Per-kind palette. Process/data lean white-on-purple
+                # accent, start/end are the brand color, decision is
+                # amber to call attention to the branch.
                 if kind in ("start", "end"):
-                    fill = p.purple
+                    fill = p.purple_dk
+                    text_color = "FFFFFF"
+                    accent_color = None  # the body itself is the accent
                 elif kind == "decision":
-                    fill = p.amber
+                    fill = "FFF6E6"  # warm white tint
+                    text_color = p.black
+                    accent_color = p.amber
                 elif kind == "data":
-                    fill = p.purple_bg
+                    fill = "F4F2FA"
+                    text_color = p.black
+                    accent_color = p.purple_lt
+                else:  # process
+                    fill = "FFFFFF"
+                    text_color = p.black
+                    accent_color = p.purple_dk
 
                 if kind in ("start", "end"):
                     shapes.append(
@@ -241,9 +288,10 @@ class FlowchartRenderer(FigureRenderer):
                             node_h,
                             fill,
                             corner_radius_pct=50,
-                            line_color=p.purple_dk,
+                            shadow=True,
                         )
                     )
+                    sid += 1
                 elif kind == "decision":
                     shapes.append(
                         _diamond(
@@ -254,9 +302,10 @@ class FlowchartRenderer(FigureRenderer):
                             used_w,
                             node_h,
                             fill,
-                            p.purple_dk,
+                            shadow=True,
                         )
                     )
+                    sid += 1
                 elif kind == "data":
                     shapes.append(
                         _parallelogram(
@@ -267,12 +316,12 @@ class FlowchartRenderer(FigureRenderer):
                             used_w,
                             node_h,
                             fill,
-                            p.purple_dk,
                         )
                     )
+                    sid += 1
                 else:
                     shapes.append(
-                        rect_shape(
+                        round_rect_shape(
                             sid,
                             f"fc-{node['id']}",
                             slot_x,
@@ -280,22 +329,36 @@ class FlowchartRenderer(FigureRenderer):
                             used_w,
                             node_h,
                             fill,
-                            line_color=p.purple_dk,
-                            line_width_emu=6350,
+                            corner_radius_pct=10,
+                            shadow=True,
                         )
                     )
-                sid += 1
+                    sid += 1
+                    if accent_color is not None:
+                        # Thin colored bar on the leftmost edge.
+                        # Drawn as plain rect (no rounding) so it tucks
+                        # behind the card's rounded corners visually.
+                        shapes.append(
+                            rect_shape(
+                                sid,
+                                f"fc-acc-{node['id']}",
+                                slot_x,
+                                node_y,
+                                accent_w,
+                                node_h,
+                                accent_color,
+                            )
+                        )
+                        sid += 1
 
-                # Label centered inside the node. Diamonds get a
-                # slightly inset text box so the label clears the
-                # diamond's corners.
+                # Label centered with a healthy inset so JP text
+                # doesn't kiss the rounded corners.
                 if kind == "decision":
                     text_x = slot_x + used_w // 6
                     text_w = used_w * 2 // 3
                 else:
-                    text_x = slot_x + 80000
-                    text_w = used_w - 160000
-                text_color = "FFFFFF" if kind in ("start", "end") else p.black
+                    text_x = slot_x + accent_w + 100000
+                    text_w = used_w - accent_w - 200000
                 shapes.append(
                     text_box(
                         sid,
@@ -306,7 +369,7 @@ class FlowchartRenderer(FigureRenderer):
                         node_h - 80000,
                         node["label"],
                         size_pt=11,
-                        bold=kind in ("start", "end"),
+                        bold=kind in ("start", "end", "decision"),
                         color=text_color,
                         font=ctx.font,
                         align="ctr",
@@ -326,18 +389,13 @@ class FlowchartRenderer(FigureRenderer):
             dx, dy, dw, dh = bboxes[dst]
             sx_c = sx + sw // 2
             dx_c = dx + dw // 2
-            # If source is above target (the common case in a top-down
-            # flow) connect bottom-of-source → top-of-target.
             if sy + sh <= dy:
                 start = (sx_c, sy + sh)
                 end = (dx_c, dy)
             elif dy + dh <= sy:
-                # Edge going up (loop-back). Connect top-of-source →
-                # bottom-of-target.
                 start = (sx_c, sy)
                 end = (dx_c, dy + dh)
             else:
-                # Same layer or overlapping rows — draw center to center.
                 start = centers[src]
                 end = centers[dst]
             shapes.append(
@@ -348,24 +406,38 @@ class FlowchartRenderer(FigureRenderer):
                     start[1],
                     end[0],
                     end[1],
-                    p.dark,
+                    p.muted,
+                    width_emu=9525,
                 )
             )
             sid += 1
 
             label = e.get("label")
             if label:
-                # Place the label just to the right of the arrow's
-                # midpoint so it doesn't sit on top of the line itself.
+                # Edge labels sit on a tiny white pill so they don't
+                # collide with the connector underneath.
                 mid_x = (start[0] + end[0]) // 2
                 mid_y = (start[1] + end[1]) // 2
-                lbl_w = 600000
-                lbl_h = 240000
+                lbl_w = 480000
+                lbl_h = 220000
+                shapes.append(
+                    round_rect_shape(
+                        sid,
+                        f"fc-edge-pill-{ei}",
+                        mid_x - lbl_w // 2,
+                        mid_y - lbl_h // 2,
+                        lbl_w,
+                        lbl_h,
+                        "FFFFFF",
+                        corner_radius_pct=50,
+                    )
+                )
+                sid += 1
                 shapes.append(
                     text_box(
                         sid,
                         f"fc-edge-lbl-{ei}",
-                        mid_x + 40000,
+                        mid_x - lbl_w // 2,
                         mid_y - lbl_h // 2,
                         lbl_w,
                         lbl_h,
@@ -373,7 +445,7 @@ class FlowchartRenderer(FigureRenderer):
                         size_pt=9,
                         color=p.dark,
                         font=ctx.font,
-                        align="l",
+                        align="ctr",
                     )
                 )
                 sid += 1

@@ -8,7 +8,12 @@ line.
 
 Used for "DX 推進" / "顧客提供価値" / "プロジェクトのリスク" — radial
 relationships where the center is the topic and each branch is a
-peer-level facet (no implied flow direction)."""
+peer-level facet (no implied flow direction).
+
+Visual: flat white branch cards with shadow + small color-coded
+header bar; radial lines are thin and de-saturated. The center
+bubble is the only saturated element so it reads as the anchor.
+"""
 
 from __future__ import annotations
 
@@ -20,6 +25,7 @@ from ..shapes import (
     TextRun,
     _i,
     _xml_escape,
+    rect_shape,
     round_rect_shape,
     text_box,
     text_box_paragraphs,
@@ -31,6 +37,9 @@ _MIN_BRANCHES = 3
 _MAX_BRANCHES = 8
 _MAX_ITEMS_PER_BRANCH = 4
 
+# Cycle accent colors so adjacent branches don't share one.
+_BRANCH_ACCENTS = ("purple_dk", "amber", "green", "purple_lt", "muted", "purple")
+
 
 def _ellipse(
     sp_id: int,
@@ -40,14 +49,18 @@ def _ellipse(
     w: int,
     h: int,
     fill: str,
-    line_color: str | None = None,
+    *,
+    shadow: bool = False,
 ) -> str:
-    ln = ""
-    if line_color:
-        ln = (
-            f'<a:ln w="6350">'
-            f'<a:solidFill><a:srgbClr val="{line_color}"/></a:solidFill>'
-            f"</a:ln>"
+    effect = ""
+    if shadow:
+        effect = (
+            "<a:effectLst>"
+            '<a:outerShdw blurRad="76200" dist="38100" dir="5400000" '
+            'algn="t" rotWithShape="0">'
+            '<a:srgbClr val="000000"><a:alpha val="18000"/></a:srgbClr>'
+            "</a:outerShdw>"
+            "</a:effectLst>"
         )
     return (
         f'<p:sp><p:nvSpPr><p:cNvPr id="{sp_id}" name="{_xml_escape(name)}"/>'
@@ -56,7 +69,8 @@ def _ellipse(
         f'<a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{w}" cy="{h}"/></a:xfrm>'
         f'<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>'
         f'<a:solidFill><a:srgbClr val="{fill}"/></a:solidFill>'
-        f"{ln}"
+        f'<a:ln><a:noFill/></a:ln>'
+        f"{effect}"
         f"</p:spPr>"
         f'<p:txBody><a:bodyPr wrap="square" anchor="ctr"/><a:lstStyle/><a:p/></p:txBody>'
         f"</p:sp>"
@@ -71,7 +85,7 @@ def _line(
     x2: int,
     y2: int,
     color: str,
-    width_emu: int = 9525,
+    width_emu: int = 6350,
 ) -> str:
     bx, by = min(x1, x2), min(y1, y2)
     bw, bh = max(abs(x2 - x1), 1), max(abs(y2 - y1), 1)
@@ -153,58 +167,50 @@ class SpiderMapRenderer(FigureRenderer):
         branches: list[dict[str, Any]] = list(content["branches"])
         n = len(branches)
 
-        # Geometry. Each branch is a self-contained roundRect card
-        # carrying both label and items, so we don't have to chase
-        # overflowing item lists with a separate text box. The card
-        # height grows with the item count; the radius is sized so
-        # cards don't crash into the center bubble or each other.
         canvas_min = min(container.w, container.h)
         cx = container.x + container.w // 2
         cy = container.y + container.h // 2
 
-        center_w = _i(canvas_min * 0.28)
-        center_h = _i(center_w * 0.55)
+        # Center is a circle (square aspect) so it doesn't squash the
+        # label awkwardly when the canvas is wide.
+        center_d = _i(canvas_min * 0.26)
 
-        # Pre-compute branch card heights so we can pick a radius that
-        # at least clears the central bubble plus the tallest card.
-        # Generous header and per-item heights so JP text + bullets
-        # don't overlap when LibreOffice rasterizes the slide.
+        # Branch card sizing — narrower cards so we can crank the
+        # horizontal radius further on the wide content canvas
+        # (8.4M wide by 2.8M tall EMU) without overlapping the center.
         max_items = max((len(b.get("items") or []) for b in branches), default=0)
-        card_w = _i(canvas_min * 0.34)
-        card_header_h = _i(canvas_min * 0.13)
+        card_w = _i(canvas_min * 0.42)
+        card_header_h = _i(canvas_min * 0.18)
         card_item_h = _i(canvas_min * 0.08)
         card_pad_v = _i(canvas_min * 0.04)
         card_h_base = card_header_h + max_items * card_item_h + card_pad_v
 
-        # Radius from canvas center to branch *center*. Cap so cards
-        # don't overflow the container; ensure they clear the central
-        # bubble plus a small gap.
-        max_radius_x = (container.w // 2) - card_w // 2 - _i(canvas_min * 0.02)
-        max_radius_y = (container.h // 2) - card_h_base // 2 - _i(canvas_min * 0.02)
-        min_radius = max(center_w, center_h) // 2 + _i(canvas_min * 0.08)
-        radius = min(max(max_radius_x, max_radius_y, min_radius), max(max_radius_x, max_radius_y))
-        radius = max(radius, min_radius)
+        # Elliptical placement matches the canvas aspect: branches at
+        # left/right get pushed further out (where there's room),
+        # top/bottom stay close-ish (where there isn't). Without this
+        # the horizontal-pair branches collide with the center bubble.
+        margin = _i(canvas_min * 0.02)
+        radius_x = max((container.w // 2) - card_w // 2 - margin, center_d)
+        radius_y = max((container.h // 2) - card_h_base // 2 - margin, center_d // 2)
 
         shapes: list[str] = []
         sid = ctx.next_shape_id
 
-        # Branches first so connecting lines paint under the center bubble.
+        # Branches first so connectors paint under the center bubble.
         for i, branch in enumerate(branches):
             angle_deg = -90 + (360.0 * i / n)
             rad = math.radians(angle_deg)
-            bcx = cx + int(radius * math.cos(rad))
-            bcy = cy + int(radius * math.sin(rad))
+            bcx = cx + int(radius_x * math.cos(rad))
+            bcy = cy + int(radius_y * math.sin(rad))
 
             items = branch.get("items") or []
             card_h = card_header_h + len(items) * card_item_h + card_pad_v
             bx = bcx - card_w // 2
             by = bcy - card_h // 2
-            # Clamp to container so the card never bleeds off-canvas.
             bx = max(container.x, min(bx, container.x + container.w - card_w))
             by = max(container.y, min(by, container.y + container.h - card_h))
 
-            # Connector center → card center. Drawn before the card so
-            # the line tucks under the rounded edge.
+            # Connector center → card center (drawn before card).
             shapes.append(
                 _line(
                     sid,
@@ -213,12 +219,16 @@ class SpiderMapRenderer(FigureRenderer):
                     cy,
                     bx + card_w // 2,
                     by + card_h // 2,
-                    p.purple_lt,
-                    width_emu=12700,
+                    p.border,
+                    width_emu=6350,
                 )
             )
             sid += 1
 
+            accent_attr = _BRANCH_ACCENTS[i % len(_BRANCH_ACCENTS)]
+            accent_color = getattr(p, accent_attr, p.purple_dk)
+
+            # Card body: white with shadow, no border.
             shapes.append(
                 round_rect_shape(
                     sid,
@@ -227,29 +237,46 @@ class SpiderMapRenderer(FigureRenderer):
                     by,
                     card_w,
                     card_h,
-                    p.purple_bg,
-                    corner_radius_pct=18,
-                    line_color=p.purple,
-                    line_width_emu=6350,
+                    "FFFFFF",
+                    corner_radius_pct=14,
+                    shadow=True,
                 )
             )
             sid += 1
 
-            # Header label — centered in the dedicated header band.
+            # Top accent bar (subtle).
+            bar_h = max(_i(canvas_min * 0.012), 24000)
+            shapes.append(
+                rect_shape(
+                    sid,
+                    f"sm-card-bar-{i}",
+                    bx + _i(card_w * 0.06),
+                    by + _i(card_h * 0.10),
+                    _i(card_w * 0.18),
+                    bar_h,
+                    accent_color,
+                )
+            )
+            sid += 1
+
+            # Header sits in the top band only — no part of the label
+            # bleeds into the items area below.
+            header_text_y = by + _i(card_header_h * 0.35)
+            header_text_h = card_header_h - _i(card_header_h * 0.4)
             shapes.append(
                 text_box(
                     sid,
                     f"sm-card-lbl-{i}",
-                    bx + 40000,
-                    by + 20000,
-                    card_w - 80000,
-                    card_header_h - 40000,
+                    bx + 60000,
+                    header_text_y,
+                    card_w - 120000,
+                    header_text_h,
                     branch["label"],
-                    size_pt=11,
+                    size_pt=12,
                     bold=True,
-                    color=p.purple_dk,
+                    color=p.black,
                     font=ctx.font,
-                    align="ctr",
+                    align="l",
                 )
             )
             sid += 1
@@ -260,24 +287,26 @@ class SpiderMapRenderer(FigureRenderer):
                         runs=(
                             TextRun(
                                 text="・ " + str(it),
-                                size_pt=8,
+                                size_pt=9,
                                 color=p.dark,
                             ),
                         ),
                         align="l",
+                        space_before_pt=2,
                     )
                     for it in items
                 ]
-                items_y = by + card_header_h
-                items_h = len(items) * card_item_h
+                # Anchor the items block under the header row; the
+                # `card_header_h` band reserves enough vertical space
+                # for the label so items never crowd it.
                 shapes.append(
                     text_box_paragraphs(
                         sid,
                         f"sm-card-items-{i}",
-                        bx + 60000,
-                        items_y,
-                        card_w - 120000,
-                        items_h,
+                        bx + 80000,
+                        by + card_header_h,
+                        card_w - 160000,
+                        len(items) * card_item_h,
                         paragraphs,
                         font=ctx.font,
                         anchor="t",
@@ -291,11 +320,12 @@ class SpiderMapRenderer(FigureRenderer):
             _ellipse(
                 sid,
                 "sm-center",
-                cx - center_w // 2,
-                cy - center_h // 2,
-                center_w,
-                center_h,
-                p.purple,
+                cx - center_d // 2,
+                cy - center_d // 2,
+                center_d,
+                center_d,
+                p.purple_dk,
+                shadow=True,
             )
         )
         sid += 1
@@ -303,12 +333,12 @@ class SpiderMapRenderer(FigureRenderer):
             text_box(
                 sid,
                 "sm-center-lbl",
-                cx - center_w // 2 + 40000,
-                cy - center_h // 2 + 40000,
-                center_w - 80000,
-                center_h - 80000,
+                cx - center_d // 2 + 60000,
+                cy - center_d // 2 + 60000,
+                center_d - 120000,
+                center_d - 120000,
                 center["label"],
-                size_pt=12,
+                size_pt=14,
                 bold=True,
                 color="FFFFFF",
                 font=ctx.font,

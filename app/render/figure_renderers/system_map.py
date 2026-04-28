@@ -10,19 +10,27 @@ Auto-routing arbitrary edges across columns is intentionally simple:
 every connection is a single straight line from the right edge of
 the source to the left edge of the destination (or center-to-center
 for connections inside the same group). That's predictable enough
-to ship without bringing in a layout library."""
+to ship without bringing in a layout library.
+
+Visual: white item cards with a colored left bar (one accent per
+group) and shadow lift; group titles use a thin underline rather
+than a heavy color band so the eye lands on the cards, not on the
+chrome around them.
+"""
 
 from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..shapes import _i, _xml_escape, rect_outline, round_rect_shape, text_box
+from ..shapes import _i, _xml_escape, rect_shape, round_rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
 _MIN_GROUPS = 2
 _MAX_GROUPS = 5
 _MAX_ITEMS_PER_GROUP = 6
+
+_GROUP_ACCENTS = ("purple_dk", "amber", "green", "purple_lt", "muted")
 
 
 def _line_with_optional_arrow(
@@ -35,13 +43,13 @@ def _line_with_optional_arrow(
     color: str,
     *,
     arrow: bool = True,
-    width_emu: int = 9525,
+    width_emu: int = 6350,
 ) -> str:
     bx, by = min(x1, x2), min(y1, y2)
     bw, bh = max(abs(x2 - x1), 1), max(abs(y2 - y1), 1)
     flip_h = "1" if x2 < x1 else "0"
     flip_v = "1" if y2 < y1 else "0"
-    tail = '<a:tailEnd type="triangle" w="med" len="med"/>' if arrow else ""
+    tail = '<a:tailEnd type="triangle" w="sm" len="sm"/>' if arrow else ""
     return (
         f'<p:cxnSp><p:nvCxnSpPr>'
         f'<p:cNvPr id="{sp_id}" name="{_xml_escape(name)}"/>'
@@ -163,84 +171,67 @@ class SystemMapRenderer(FigureRenderer):
         connections: list[dict[str, Any]] = list(content.get("connections") or [])
         n_groups = len(groups)
 
-        gap = container.w // 60
+        gap = container.w // 30
         group_w = (container.w - gap * (n_groups - 1)) // n_groups
-        title_h = 280000
-        title_gap = 60000
+        title_h = _i(container.h * 0.12)
+        underline_h = max(_i(0.025 * 914400), 18000)  # ~1.5pt
+        accent_w = max(_i(0.05 * 914400), 36000)  # ~3pt left accent bar
 
         shapes: list[str] = []
         sid = ctx.next_shape_id
 
-        # Per-item layout: (x, y, w, h) keyed by item id.
         item_box: dict[str, tuple[int, int, int, int]] = {}
-        # Group bounds for the surrounding card.
-        group_box: list[tuple[int, int, int, int, str]] = []
 
         for gi, g in enumerate(groups):
             gx = container.x + gi * (group_w + gap)
             gy = container.y
             gh = container.h
-            group_box.append((gx, gy, group_w, gh, g["name"]))
+            accent_color = getattr(p, _GROUP_ACCENTS[gi % len(_GROUP_ACCENTS)], p.purple_dk)
 
-            # Group title bar.
+            # Group title — plain text + thin colored underline.
             shapes.append(
-                round_rect_shape(
+                text_box(
                     sid,
                     f"sysmap-gtitle-{gi}",
                     gx,
                     gy,
                     group_w,
-                    title_h,
-                    p.purple,
-                    corner_radius_pct=12,
-                )
-            )
-            sid += 1
-            shapes.append(
-                text_box(
-                    sid,
-                    f"sysmap-gtitle-lbl-{gi}",
-                    gx + 40000,
-                    gy + 20000,
-                    group_w - 80000,
-                    title_h - 40000,
+                    title_h - underline_h - 30000,
                     g["name"],
-                    size_pt=11,
+                    size_pt=12,
                     bold=True,
-                    color="FFFFFF",
+                    color=p.black,
                     font=ctx.font,
-                    align="ctr",
+                    align="l",
                 )
             )
             sid += 1
-
-            # Group surrounding outline.
             shapes.append(
-                rect_outline(
+                rect_shape(
                     sid,
-                    f"sysmap-gout-{gi}",
+                    f"sysmap-gunder-{gi}",
                     gx,
-                    gy,
-                    group_w,
-                    gh,
-                    p.border,
-                    line_width_emu=6350,
+                    gy + title_h - underline_h - 20000,
+                    _i(group_w * 0.45),
+                    underline_h,
+                    accent_color,
                 )
             )
             sid += 1
 
             items = g["items"]
             n_items = len(items)
-            content_top = gy + title_h + title_gap
-            content_h = gh - title_h - title_gap - 40000
+            content_top = gy + title_h
+            content_h = gh - title_h - 60000
             slot_h = content_h // n_items
-            card_h = max(_i(slot_h * 0.78), 320000)
+            card_h = max(_i(slot_h * 0.78), 360000)
             slot_v_pad = (slot_h - card_h) // 2
-            card_x = gx + 60000
-            card_w = group_w - 120000
+            card_x = gx
+            card_w = group_w
 
             for ii, it in enumerate(items):
                 cy = content_top + ii * slot_h + slot_v_pad
+                # White card, no border, soft shadow.
                 shapes.append(
                     round_rect_shape(
                         sid,
@@ -249,30 +240,44 @@ class SystemMapRenderer(FigureRenderer):
                         cy,
                         card_w,
                         card_h,
-                        p.purple_bg,
+                        "FFFFFF",
                         corner_radius_pct=10,
-                        line_color=p.purple_lt,
-                        line_width_emu=6350,
+                        shadow=True,
                     )
                 )
                 sid += 1
-                # Label + optional sub-label inside the card.
+                # Colored left accent bar coding the group.
+                shapes.append(
+                    rect_shape(
+                        sid,
+                        f"sysmap-card-acc-{it['id']}",
+                        card_x,
+                        cy,
+                        accent_w,
+                        card_h,
+                        accent_color,
+                    )
+                )
+                sid += 1
+
                 sub = it.get("sub")
+                inset_x = card_x + accent_w + 80000
+                inset_w = card_w - accent_w - 160000
                 if sub:
                     shapes.append(
                         text_box(
                             sid,
                             f"sysmap-card-lbl-{it['id']}",
-                            card_x + 40000,
+                            inset_x,
                             cy + 30000,
-                            card_w - 80000,
+                            inset_w,
                             card_h // 2 - 30000,
                             it["label"],
-                            size_pt=11,
+                            size_pt=12,
                             bold=True,
-                            color=p.purple_dk,
+                            color=p.black,
                             font=ctx.font,
-                            align="ctr",
+                            align="l",
                         )
                     )
                     sid += 1
@@ -280,15 +285,15 @@ class SystemMapRenderer(FigureRenderer):
                         text_box(
                             sid,
                             f"sysmap-card-sub-{it['id']}",
-                            card_x + 40000,
+                            inset_x,
                             cy + card_h // 2,
-                            card_w - 80000,
+                            inset_w,
                             card_h // 2 - 30000,
                             str(sub),
                             size_pt=8,
                             color=p.muted,
                             font=ctx.font,
-                            align="ctr",
+                            align="l",
                         )
                     )
                     sid += 1
@@ -297,16 +302,16 @@ class SystemMapRenderer(FigureRenderer):
                         text_box(
                             sid,
                             f"sysmap-card-lbl-{it['id']}",
-                            card_x + 40000,
+                            inset_x,
                             cy + 30000,
-                            card_w - 80000,
+                            inset_w,
                             card_h - 60000,
                             it["label"],
-                            size_pt=11,
+                            size_pt=12,
                             bold=True,
-                            color=p.purple_dk,
+                            color=p.black,
                             font=ctx.font,
-                            align="ctr",
+                            align="l",
                             auto_fit=True,
                         )
                     )
@@ -321,13 +326,10 @@ class SystemMapRenderer(FigureRenderer):
                 continue
             sx, sy, sw, sh = sid_box
             dx, dy, dw, dh = did_box
-            # Same column → vertical line; otherwise horizontal between
-            # the closer side edges.
             if abs((sx + sw // 2) - (dx + dw // 2)) < sw // 2:
                 start = (sx + sw // 2, sy + sh)
                 end = (dx + dw // 2, dy)
             elif sx < dx:
-                # Source is to the left → exit right edge, enter left edge.
                 start = (sx + sw, sy + sh // 2)
                 end = (dx, dy + dh // 2)
             else:
@@ -341,9 +343,9 @@ class SystemMapRenderer(FigureRenderer):
                     start[1],
                     end[0],
                     end[1],
-                    p.dark,
+                    p.muted,
                     arrow=bool(c.get("arrow", True)),
-                    width_emu=9525,
+                    width_emu=6350,
                 )
             )
             sid += 1
@@ -351,14 +353,30 @@ class SystemMapRenderer(FigureRenderer):
             if label:
                 mid_x = (start[0] + end[0]) // 2
                 mid_y = (start[1] + end[1]) // 2
+                lbl_w = 600000
+                lbl_h = 220000
+                # White pill backing so label doesn't sit on the line.
+                shapes.append(
+                    round_rect_shape(
+                        sid,
+                        f"sysmap-conn-pill-{ci}",
+                        mid_x - lbl_w // 2,
+                        mid_y - lbl_h // 2,
+                        lbl_w,
+                        lbl_h,
+                        "FFFFFF",
+                        corner_radius_pct=50,
+                    )
+                )
+                sid += 1
                 shapes.append(
                     text_box(
                         sid,
                         f"sysmap-conn-lbl-{ci}",
-                        mid_x - 360000,
-                        mid_y - 120000,
-                        720000,
-                        240000,
+                        mid_x - lbl_w // 2,
+                        mid_y - lbl_h // 2,
+                        lbl_w,
+                        lbl_h,
                         str(label),
                         size_pt=8,
                         color=p.dark,
