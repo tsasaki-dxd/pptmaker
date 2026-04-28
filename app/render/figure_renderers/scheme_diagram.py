@@ -285,23 +285,66 @@ class SchemeDiagramRenderer(FigureRenderer):
 
         positions: dict[str, tuple[int, int, int, int]] = {}
 
+        # Lookup: actor_id → group index, for column reordering and
+        # title-band reservation. -1 means ungrouped.
+        member_to_group: dict[str, int] = {}
+        for gi, g in enumerate(groups):
+            for m in g.get("members", []):
+                # Multiple groups claiming the same actor would be a
+                # validation bug; the last one wins here without
+                # special-casing.
+                member_to_group[m] = gi
+
+        # Title-band height reserved above each group's first member so
+        # the group's labelled top bar doesn't crash into a non-member
+        # actor positioned right above it.
+        col_title_band = max(_i(canvas_h * 0.07), 200000)
+        col_title_pad = max(_i(canvas_w * 0.014), 24000)
+        title_room = col_title_band + col_title_pad
+
         # ---- left / right columns ------------------------------------
         def _layout_column(
             actor_list: list[dict[str, Any]], col_x: int, col_w: int
         ) -> None:
             if not actor_list:
                 return
-            n = len(actor_list)
+            # Reorder so ungrouped actors come first, then group
+            # members clustered together (by group index, preserving
+            # original order within each group via stable sort). The
+            # group's title bar then has a clean strip of column to
+            # render in without overlapping a non-member.
+            ordered = sorted(
+                actor_list,
+                key=lambda a: member_to_group.get(a["id"], -1),
+            )
+            n = len(ordered)
             col_y = container.y
             col_h = canvas_h
-            gap = max(_i(col_h / (n * 7)), 30000)
-            avail = col_h - gap * (n + 1)
-            ah = avail // n
-            for i, a in enumerate(actor_list):
-                ax = col_x + 30000
-                ay = col_y + gap + i * (ah + gap)
-                aw = col_w - 60000
-                positions[a["id"]] = (ax, ay, aw, ah)
+            base_gap = max(_i(col_h / (n * 7)), 30000)
+
+            # How many groups have at least one member in this column?
+            # Each one needs one extra title-room slot inserted before
+            # its first member.
+            seen_groups: set[int] = set()
+            extras = 0
+            for a in ordered:
+                gid = member_to_group.get(a["id"], -1)
+                if gid >= 0 and gid not in seen_groups:
+                    seen_groups.add(gid)
+                    extras += 1
+
+            avail = col_h - base_gap * (n + 1) - title_room * extras
+            ah = max(avail // n, 240000)
+
+            cur_y = col_y + base_gap
+            placed_groups: set[int] = set()
+            for a in ordered:
+                gid = member_to_group.get(a["id"], -1)
+                if gid >= 0 and gid not in placed_groups:
+                    placed_groups.add(gid)
+                    cur_y += title_room
+                positions[a["id"]] = (col_x + 30000, cur_y, col_w - 60000, ah)
+                cur_y += ah + base_gap
 
         _layout_column(by_region["left"], container.x, left_w)
         _layout_column(
@@ -480,7 +523,11 @@ class SchemeDiagramRenderer(FigureRenderer):
                 # midpoint when flows fan out from the center.
                 lx = start[0] + (end[0] - start[0]) * 40 // 100
                 ly = start[1] + (end[1] - start[1]) * 40 // 100
-                lbl_w = 720000
+                # Pill width grows with label length so JP labels like
+                # "出資 / 運営" don't overflow the default. ~80k EMU
+                # per character at 8pt JP plus padding.
+                lbl_text = str(label)
+                lbl_w = max(720000, 80000 * len(lbl_text) + 200000)
                 lbl_h = 240000
                 shapes.append(
                     round_rect_shape(
@@ -505,10 +552,11 @@ class SchemeDiagramRenderer(FigureRenderer):
                         ly - lbl_h // 2,
                         lbl_w,
                         lbl_h,
-                        str(label),
+                        lbl_text,
                         size_pt=8,
                         color=p.dark,
                         font=ctx.font,
+                        auto_fit=True,
                         align="ctr",
                     )
                 )
