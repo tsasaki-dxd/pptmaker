@@ -108,8 +108,14 @@ case "$STATUS" in
 esac
 
 # ---- 1. apply CFN ----
-echo "=== cdk deploy App-prod ==="
-cdk deploy App-prod \
+# When the custom-domain feature flag is on, the synthesized assembly
+# also contains Cert-prod (us-east-1). `cdk deploy "*"` on the assembly
+# will deploy whichever stacks the assembly contains, and CDK orders
+# them via cross-region references. SlideForgePipelineStack is *not*
+# in this assembly — pipeline_stack.py is synthed in a separate
+# bootstrap path — so we don't risk recursive self-deploy here.
+echo "=== cdk deploy (App-prod + Cert-prod if present) ==="
+cdk deploy "*" \
   --app cdk.out \
   --require-approval never \
   --outputs-file /tmp/deploy-outputs.json
@@ -129,7 +135,9 @@ USER_POOL_ID=$(get UserPoolId)
 USER_POOL_CLIENT_ID=$(get UserPoolClientId)
 WEB_BUCKET=$(get WebBucketName)
 WEBSITE_URL=$(get WebsiteUrl)
+DISTRIBUTION_ID=$(get DistributionId)  # empty string when feature flag off
 echo "Website will be at: $WEBSITE_URL"
+echo "DistributionId: ${DISTRIBUTION_ID:-<none>}"
 
 # ---- 3. build the SPA ----
 echo "=== build Next.js ==="
@@ -138,9 +146,18 @@ if [ -f package-lock.json ]; then npm ci; else npm install --no-audit --no-fund;
 npm run build
 
 # ---- 4. inject runtime config ----
+# Same-origin (CloudFront): leave apiEndpoint blank so the SPA hits
+# /api/* relative to its own origin and the distribution routes it to
+# the API Gateway behavior. Without CloudFront we still need the full
+# API Gateway URL so the SPA can cross-origin call it.
+if [ -n "$DISTRIBUTION_ID" ]; then
+  EFFECTIVE_API_ENDPOINT=""
+else
+  EFFECTIVE_API_ENDPOINT="$API_ENDPOINT"
+fi
 cat > out/config.json <<EOF
 {
-  "apiEndpoint": "$API_ENDPOINT",
+  "apiEndpoint": "$EFFECTIVE_API_ENDPOINT",
   "userPoolId": "$USER_POOL_ID",
   "userPoolClientId": "$USER_POOL_CLIENT_ID",
   "region": "$AWS_DEFAULT_REGION"
@@ -152,6 +169,14 @@ cat out/config.json
 echo "=== sync to S3 web bucket ==="
 aws s3 sync out/ "s3://$WEB_BUCKET/" --delete --cache-control "public, max-age=300"
 aws s3 cp out/config.json "s3://$WEB_BUCKET/config.json" --cache-control "no-store"
+
+# ---- 6. invalidate CloudFront cache (only when distribution exists) ----
+if [ -n "$DISTRIBUTION_ID" ]; then
+  echo "=== CloudFront invalidation ==="
+  aws cloudfront create-invalidation \
+    --distribution-id "$DISTRIBUTION_ID" \
+    --paths "/*"
+fi
 
 echo "=== done. Website: $WEBSITE_URL ==="
 """.strip(),
