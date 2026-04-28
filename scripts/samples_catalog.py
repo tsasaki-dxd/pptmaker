@@ -861,17 +861,41 @@ SAMPLES: list[Sample] = [
         id="flowchart_approval",
         figure_type="flowchart",
         title="申請承認フロー",
-        prompt="申請→金額判定→承認 or 自動承認 の業務フローを判断分岐つきで",
+        prompt="申請→金額判定→承認の業務フローに、各ステップの責任者 / SLA も添える",
         figure_content={
             "layers": [
                 [{"id": "s", "label": "開始", "kind": "start"}],
-                [{"id": "p1", "label": "申請内容を入力", "kind": "process"}],
+                [
+                    {
+                        "id": "p1",
+                        "label": "申請内容を入力",
+                        "kind": "process",
+                        "note": "申請者 / 5分以内",
+                    }
+                ],
                 [{"id": "d1", "label": "金額 > 100万?", "kind": "decision"}],
                 [
-                    {"id": "p2", "label": "上長承認", "kind": "process"},
-                    {"id": "p3", "label": "自動承認", "kind": "process"},
+                    {
+                        "id": "p2",
+                        "label": "上長承認",
+                        "kind": "process",
+                        "note": "1営業日 SLA",
+                    },
+                    {
+                        "id": "p3",
+                        "label": "自動承認",
+                        "kind": "process",
+                        "note": "ルールベース即時",
+                    },
                 ],
-                [{"id": "p4", "label": "システム反映", "kind": "process"}],
+                [
+                    {
+                        "id": "p4",
+                        "label": "システム反映",
+                        "kind": "process",
+                        "note": "ERP 連携",
+                    }
+                ],
                 [{"id": "e", "label": "完了", "kind": "end"}],
             ],
             "edges": [
@@ -884,7 +908,7 @@ SAMPLES: list[Sample] = [
                 {"from": "p4", "to": "e"},
             ],
         },
-        notes="flowchart — 開始/終了は丸枠、判定は ◇、process は四角。",
+        notes="flowchart — process ノードに note (担当・SLA) 追加。decision は note 無視。",
     ),
     Sample(
         id="spider_map_dx",
@@ -906,7 +930,7 @@ SAMPLES: list[Sample] = [
         id="system_map_arch",
         figure_type="system_map",
         title="アーキテクチャ概観",
-        prompt="フロント / バックエンド / 外部システム の 3 グループ構成と矢印で関係",
+        prompt="フロント / バックエンド / 外部システムの構成。各サービスに技術的特徴も短く添える",
         figure_content={
             "groups": [
                 {
@@ -919,9 +943,24 @@ SAMPLES: list[Sample] = [
                 {
                     "name": "バックエンド",
                     "items": [
-                        {"id": "api", "label": "API", "sub": "FastAPI"},
-                        {"id": "worker", "label": "Worker", "sub": "SQS"},
-                        {"id": "db", "label": "DB", "sub": "PostgreSQL"},
+                        {
+                            "id": "api",
+                            "label": "API",
+                            "sub": "FastAPI",
+                            "notes": ["Cognito JWT", "RDS Proxy 経由"],
+                        },
+                        {
+                            "id": "worker",
+                            "label": "Worker",
+                            "sub": "SQS",
+                            "notes": ["DLQ 2回再送", "可視性 6分"],
+                        },
+                        {
+                            "id": "db",
+                            "label": "DB",
+                            "sub": "PostgreSQL",
+                            "notes": ["Multi-AZ", "PITR 7日"],
+                        },
                     ],
                 },
                 {
@@ -941,23 +980,34 @@ SAMPLES: list[Sample] = [
                 {"from": "worker", "to": "ses"},
             ],
         },
-        notes="system_map — グループ列 + ノードカード + コネクタ。",
+        notes="system_map — グループ列 + ノードカードに notes (技術特徴) を bullet で。",
     ),
     Sample(
         id="value_flow_marketplace",
         figure_type="value_flow",
         title="マーケットプレイス商流",
-        prompt="顧客・自社プラットフォーム・出店者の 3 者間の商流 / 金流 / 情報流",
+        prompt="顧客・自社・出店者の 3 者間の商流 + 各アクターのビジネス情報",
         figure_content={
             "actors": [
-                {"id": "cust", "label": "顧客", "role": "個人 / 法人"},
+                {
+                    "id": "cust",
+                    "label": "顧客",
+                    "role": "個人 / 法人",
+                    "note": "国内 50万 MAU",
+                },
                 {
                     "id": "us",
                     "label": "自社",
                     "role": "プラットフォーム",
                     "primary": True,
+                    "note": "GMV の 12% が手数料収入",
                 },
-                {"id": "ptr", "label": "出店者", "role": "サプライヤ"},
+                {
+                    "id": "ptr",
+                    "label": "出店者",
+                    "role": "サプライヤ",
+                    "note": "1,200 事業者",
+                },
             ],
             "flows": [
                 {"from": "cust", "to": "us", "label": "利用料", "kind": "money"},
@@ -967,19 +1017,30 @@ SAMPLES: list[Sample] = [
                 {"from": "ptr", "to": "cust", "label": "商品配送", "kind": "goods"},
             ],
         },
-        notes="value_flow — 3者間の双方向矢印 (色は kind: money/goods/info)。",
+        notes="value_flow — 3者間 + アクターごとに note (規模・収益モデル等)。",
     ),
     Sample(
         id="value_chain_porter",
         figure_type="value_chain",
         title="バリューチェーン",
-        prompt="調達→製造→物流→販売→サービスの主活動と支援活動を Porter 型で",
+        prompt="主活動・支援活動の Porter 型 + 各活動の改善ポイントを bullet で添える",
         figure_content={
-            "primary": ["購買物流", "製造", "出荷物流", "販売・マーケ", "サービス"],
-            "support": ["企業インフラ", "人材管理", "技術開発", "調達"],
+            "primary": [
+                {"label": "購買物流", "items": ["JIT 化", "サプライヤ品質"]},
+                {"label": "製造", "items": ["自動化", "歩留り改善"]},
+                {"label": "出荷物流", "items": ["即配対応", "在庫圧縮"]},
+                {"label": "販売・マーケ", "items": ["直販強化", "代理店活用"]},
+                {"label": "サービス", "items": ["解約防止", "更新提案"]},
+            ],
+            "support": [
+                {"label": "企業インフラ", "items": ["ガバナンス再整備"]},
+                {"label": "人材管理", "items": ["スキル可視化"]},
+                "技術開発",
+                "調達",
+            ],
             "margin_label": "利益",
         },
-        notes="value_chain — Porter 原典に近い 5 主活動 + 4 支援活動 + 末尾マージン。",
+        notes="value_chain — chevron header + 各活動カードに bullet で分析を埋め込む二段構成。",
     ),
     Sample(
         id="business_canvas_saas",

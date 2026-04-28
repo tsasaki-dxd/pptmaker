@@ -89,15 +89,34 @@ class ValueFlowRenderer(FigureRenderer):
         "goods (purple), info (muted), contract (green). Mark one actor "
         "as primary=true to render it filled in the brand color. "
         "Bidirectional flows render as two parallel arrows so neither "
-        "label sits on top of the other. "
-        "content: {actors: [{id, label, role?, primary?}], "
+        "label sits on top of the other. Each actor accepts an optional "
+        "1-2 line `note` (business-model fact / scale / regulation) "
+        "rendered below the role; cards grow taller automatically when "
+        "any actor has a note so the layout stays uniform. "
+        "content: {actors: [{id, label, role?, primary?, note?}], "
         "flows: [{from, to, label?, kind?}]}"
     )
     input_schema_example: ClassVar[dict[str, Any]] = {
         "actors": [
-            {"id": "cust", "label": "顧客", "role": "個人 / 法人"},
-            {"id": "us", "label": "自社", "role": "プラットフォーム", "primary": True},
-            {"id": "ptr", "label": "出店者", "role": "サプライヤ"},
+            {
+                "id": "cust",
+                "label": "顧客",
+                "role": "個人 / 法人",
+                "note": "国内 50万 MAU",
+            },
+            {
+                "id": "us",
+                "label": "自社",
+                "role": "プラットフォーム",
+                "primary": True,
+                "note": "GMV の 12% が手数料収入",
+            },
+            {
+                "id": "ptr",
+                "label": "出店者",
+                "role": "サプライヤ",
+                "note": "1,200 事業者",
+            },
         ],
         "flows": [
             {"from": "cust", "to": "us", "label": "利用料", "kind": "money"},
@@ -165,8 +184,13 @@ class ValueFlowRenderer(FigureRenderer):
         cx = container.x + container.w // 2
         cy = container.y + container.h // 2
 
+        # Cards grow when any actor carries a `note` so the longer
+        # description has room without crashing into the role line.
+        any_note = any(
+            isinstance(a.get("note"), str) and a["note"].strip() for a in actors
+        )
         card_w = _i(canvas_min * 0.42)
-        card_h = _i(canvas_min * 0.22)
+        card_h = _i(canvas_min * (0.30 if any_note else 0.22))
 
         # Polygon radius. For 2 actors we use horizontal placement with
         # a generous gap; for 3+ a polygon centered on the canvas.
@@ -327,7 +351,71 @@ class ValueFlowRenderer(FigureRenderer):
             text_color = "FFFFFF" if primary else p.black
             sub_color = "FFFFFF" if primary else p.muted
             role = a.get("role")
-            if role:
+            note_raw = a.get("note")
+            note = (
+                note_raw.strip()
+                if isinstance(note_raw, str) and note_raw.strip()
+                else ""
+            )
+            if note:
+                # Three-line layout: label / role / note. role can be
+                # empty in which case the role band collapses but the
+                # note still sits in the lower third.
+                label_h = _i(ah * 0.35)
+                role_h = _i(ah * 0.18) if role else 0
+                shapes.append(
+                    text_box(
+                        sid,
+                        f"vf-actor-lbl-{a['id']}",
+                        ax + 40000,
+                        ay + 30000,
+                        aw - 80000,
+                        label_h,
+                        a["label"],
+                        size_pt=14,
+                        bold=True,
+                        color=text_color,
+                        font=ctx.font,
+                        align="ctr",
+                    )
+                )
+                sid += 1
+                if role:
+                    shapes.append(
+                        text_box(
+                            sid,
+                            f"vf-actor-role-{a['id']}",
+                            ax + 40000,
+                            ay + 30000 + label_h,
+                            aw - 80000,
+                            role_h,
+                            str(role),
+                            size_pt=9,
+                            color=sub_color,
+                            font=ctx.font,
+                            align="ctr",
+                        )
+                    )
+                    sid += 1
+                note_y = ay + 30000 + label_h + role_h
+                shapes.append(
+                    text_box(
+                        sid,
+                        f"vf-actor-note-{a['id']}",
+                        ax + 50000,
+                        note_y,
+                        aw - 100000,
+                        ah - (note_y - ay) - 30000,
+                        note,
+                        size_pt=8,
+                        color=sub_color,
+                        font=ctx.font,
+                        align="ctr",
+                        auto_fit=True,
+                    )
+                )
+                sid += 1
+            elif role:
                 shapes.append(
                     text_box(
                         sid,

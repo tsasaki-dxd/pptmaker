@@ -136,17 +136,38 @@ class FlowchartRenderer(FigureRenderer):
     description = (
         "Layered vertical flowchart (2-7 layers, up to 4 nodes per layer). "
         "Node kinds: start/end (rounded), process (rect), decision (diamond), "
-        "data (parallelogram). "
-        "content: {layers: [[{id, label, kind?}]], edges: [{from, to, label?}]}"
+        "data (parallelogram). Each non-decision node accepts an optional "
+        "1-2 line `note` rendered in muted text below the label (responsible "
+        "team / SLA / output, etc.); decision nodes ignore note because the "
+        "diamond's inscribed area is too narrow. "
+        "content: {layers: [[{id, label, kind?, note?}]], "
+        "edges: [{from, to, label?}]}"
     )
     input_schema_example: ClassVar[dict[str, Any]] = {
         "layers": [
             [{"id": "s", "label": "開始", "kind": "start"}],
-            [{"id": "p1", "label": "申請内容を入力", "kind": "process"}],
+            [
+                {
+                    "id": "p1",
+                    "label": "申請内容を入力",
+                    "kind": "process",
+                    "note": "申請者 / 5分以内",
+                }
+            ],
             [{"id": "d1", "label": "金額 > 100万?", "kind": "decision"}],
             [
-                {"id": "p2", "label": "上長承認", "kind": "process"},
-                {"id": "p3", "label": "自動承認", "kind": "process"},
+                {
+                    "id": "p2",
+                    "label": "上長承認",
+                    "kind": "process",
+                    "note": "1営業日 SLA",
+                },
+                {
+                    "id": "p3",
+                    "label": "自動承認",
+                    "kind": "process",
+                    "note": "ルールベース即時",
+                },
             ],
             [{"id": "e", "label": "完了", "kind": "end"}],
         ],
@@ -226,9 +247,20 @@ class FlowchartRenderer(FigureRenderer):
         plot_h = container.h - 2 * margin_y
 
         layer_h = plot_h // n_layers
-        # Looser node sizing: shorter cards leave room for breathing space
-        # between layers and for the arrows to be visually obvious.
-        node_h = max(_i(layer_h * 0.50), 280000)
+        # When any non-decision node has a `note`, give all nodes more
+        # vertical room so the layout stays uniform and the notes have
+        # space to render under each label. Decision nodes ignore the
+        # note (their inscribed text rect is too narrow to subdivide).
+        any_note = any(
+            isinstance(n, dict)
+            and isinstance(n.get("note"), str)
+            and n["note"].strip()
+            and n.get("kind", "process") != "decision"
+            for layer in layers
+            for n in layer
+        )
+        node_h_pct = 0.72 if any_note else 0.50
+        node_h = max(_i(layer_h * node_h_pct), 360000 if any_note else 280000)
         node_v_pad = (layer_h - node_h) // 2
 
         accent_w = max(_i(0.05 * 914400), 36000)  # ~3pt left bar.
@@ -359,23 +391,70 @@ class FlowchartRenderer(FigureRenderer):
                 else:
                     text_x = slot_x + accent_w + 100000
                     text_w = used_w - accent_w - 200000
-                shapes.append(
-                    text_box(
-                        sid,
-                        f"fc-lbl-{node['id']}",
-                        text_x,
-                        node_y + 40000,
-                        text_w,
-                        node_h - 80000,
-                        node["label"],
-                        size_pt=11,
-                        bold=kind in ("start", "end", "decision"),
-                        color=text_color,
-                        font=ctx.font,
-                        align="ctr",
-                        auto_fit=True,
-                    )
+
+                note_raw = node.get("note") if kind != "decision" else None
+                note = (
+                    note_raw.strip()
+                    if isinstance(note_raw, str) and note_raw.strip()
+                    else ""
                 )
+                if note:
+                    label_h = _i(node_h * 0.45)
+                    note_y = node_y + label_h
+                    note_h = node_h - label_h - 40000
+                    shapes.append(
+                        text_box(
+                            sid,
+                            f"fc-lbl-{node['id']}",
+                            text_x,
+                            node_y + 30000,
+                            text_w,
+                            label_h - 30000,
+                            node["label"],
+                            size_pt=11,
+                            bold=kind in ("start", "end"),
+                            color=text_color,
+                            font=ctx.font,
+                            align="ctr",
+                            auto_fit=True,
+                        )
+                    )
+                    sid += 1
+                    note_color = "FFFFFF" if kind in ("start", "end") else p.muted
+                    shapes.append(
+                        text_box(
+                            sid,
+                            f"fc-note-{node['id']}",
+                            text_x,
+                            note_y,
+                            text_w,
+                            note_h,
+                            note,
+                            size_pt=8,
+                            color=note_color,
+                            font=ctx.font,
+                            align="ctr",
+                            auto_fit=True,
+                        )
+                    )
+                else:
+                    shapes.append(
+                        text_box(
+                            sid,
+                            f"fc-lbl-{node['id']}",
+                            text_x,
+                            node_y + 40000,
+                            text_w,
+                            node_h - 80000,
+                            node["label"],
+                            size_pt=11,
+                            bold=kind in ("start", "end", "decision"),
+                            color=text_color,
+                            font=ctx.font,
+                            align="ctr",
+                            auto_fit=True,
+                        )
+                    )
                 sid += 1
 
                 centers[node["id"]] = (slot_x + used_w // 2, node_y + node_h // 2)
