@@ -30,6 +30,9 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO_ROOT / "app"))
 sys.path.insert(0, str(_REPO_ROOT))
 
+import render.figure_renderers  # noqa: E402, F401  # autoload registry side-effects
+from render.figure_renderers.base import EMUBox, RenderContext  # noqa: E402
+from render.figure_renderers.registry import REGISTRY as FIGURE_REGISTRY  # noqa: E402
 from render.layout_spec import emit_layout_spec  # noqa: E402
 from render.pptx_assembler import (  # noqa: E402
     read_template_slides,
@@ -39,8 +42,16 @@ from render.pptx_assembler import (  # noqa: E402
     write_output_slides,
 )
 from render.qa.pptx_to_png import render_pptx_to_pngs  # noqa: E402
+from render.shapes import DEFAULT_FONT, DEFAULT_PALETTE  # noqa: E402
 from render.template_loader import repack, safe_unpack  # noqa: E402
-from scripts.samples_catalog import SAMPLES, Sample  # noqa: E402
+from scripts.samples_catalog import (  # noqa: E402
+    BODY_H,
+    BODY_W,
+    BODY_X,
+    BODY_Y,
+    SAMPLES,
+    Sample,
+)
 
 log = logging.getLogger("samples")
 
@@ -112,6 +123,40 @@ def _modify_slide(
 # ------------------------ rendering ---------------------------------------
 
 
+def _shapes_for_sample(sample: Sample) -> list[str]:
+    """Produce the shape XML fragments for the body of one sample.
+
+    LayoutSpec samples go through emit_layout_spec; figure_renderer
+    samples go through the registered renderer's render() with a
+    minimal RenderContext (no media — image_slot needs the live
+    pipeline)."""
+    if sample.spec is not None:
+        fragments, _ = emit_layout_spec(sample.spec)
+        return fragments
+    if sample.figure_content is None:  # defensive — __post_init__ rules this out
+        raise RuntimeError(f"sample {sample.id} has neither spec nor figure_content")
+    if sample.figure_type not in FIGURE_REGISTRY:
+        raise RuntimeError(
+            f"sample {sample.id}: figure_type {sample.figure_type!r} is not registered"
+        )
+    renderer = FIGURE_REGISTRY[sample.figure_type]
+    validation = renderer.validate(sample.figure_content)
+    if not validation.ok:
+        raise RuntimeError(
+            f"sample {sample.id}: figure_content validation failed: {validation.errors}"
+        )
+    container = EMUBox(x=BODY_X, y=BODY_Y, w=BODY_W, h=BODY_H)
+    ctx = RenderContext(
+        palette=DEFAULT_PALETTE,
+        font=DEFAULT_FONT,
+        next_shape_id=2000,
+        media=None,
+        slide_index=1,
+    )
+    out = renderer.render(sample.figure_content, container, ctx)
+    return list(out.shapes_xml)
+
+
 def _build_pptx_bytes(work_dir: Path, sample: Sample) -> bytes:
     """Unpack the template, mutate slide{TEMPLATE_SLIDE_INDEX}.xml,
     keep just that one slide, repack."""
@@ -126,7 +171,7 @@ def _build_pptx_bytes(work_dir: Path, sample: Sample) -> bytes:
         )
     base = template_slides[TEMPLATE_SLIDE_INDEX]
 
-    fragments, _ = emit_layout_spec(sample.spec)
+    fragments = _shapes_for_sample(sample)
     new_slide_xml = _modify_slide(
         base.xml,
         title=sample.title,
@@ -147,8 +192,12 @@ def _build_pptx_bytes(work_dir: Path, sample: Sample) -> bytes:
 
 
 def _spec_to_dict(sample: Sample) -> dict[str, object]:
-    """Pydantic v2 model_dump — used in manifest for the detail view."""
-    return sample.spec.model_dump(mode="python")
+    """Pydantic v2 model_dump — used in manifest for the detail view.
+    For figure_renderer samples, returns the content dict directly so
+    the gallery shows what fed the renderer."""
+    if sample.spec is not None:
+        return sample.spec.model_dump(mode="python")
+    return {"figure_content": sample.figure_content}
 
 
 def main() -> int:

@@ -8,8 +8,8 @@ export default function HomePage() {
       <h2 className="text-2xl font-bold">ダッシュボード</h2>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <Card href="/templates/" title="テンプレート" body="コーポレートテンプレートをアップロードして管理" />
-        <Card href="/projects/" title="プロジェクト" body="新規作成・骨格生成・修正・エクスポート" />
-        <Card href="/projects/" title="提案書を書く" body="自然言語から骨格を生成" />
+        <Card href="/projects/" title="新規作成" body="自然言語から骨格を生成・修正・エクスポート" />
+        <Card href="/projects/list/" title="プロジェクト一覧" body="保存済みプロジェクトを編集・複製・出力" />
         <Card href="/samples/" title="サンプル集" body="図種 × 参考プロンプト別のレンダリング例を一覧" />
       </div>
     </section>

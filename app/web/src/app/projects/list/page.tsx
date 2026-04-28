@@ -115,6 +115,15 @@ export default function ProjectsListPage() {
                   <div className="font-mono text-xs text-muted">{p.id}</div>
                 </div>
                 <div className="flex shrink-0 gap-1">
+                  <a
+                    href={`/projects/?id=${p.id}`}
+                    aria-disabled={busy}
+                    className={`rounded border border-purple-lt px-2 py-1 text-xs hover:bg-purple-lt/20 ${
+                      busy ? 'pointer-events-none opacity-50' : ''
+                    }`}
+                  >
+                    編集
+                  </a>
                   <button
                     onClick={() => handleDuplicate(p)}
                     disabled={busy}
