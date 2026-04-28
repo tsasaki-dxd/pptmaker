@@ -121,6 +121,12 @@ HEX 6 桁の代わりに以下のセマンティック名が使えます:
     + mode で grouped/stacked/stacked100）
   * 時系列の推移 → line_chart（series で複数本、x_labels で軸ラベル）
   * 構成比 → pie_chart（slices）。ラベルは内部に出ないので必要なら周囲に pill
+  * コンセプトマップ系（flowchart / spider_map / system_map / org_chart）
+    は figure_renderer 側に専用プリセットがあるため、Blueprint 段階で
+    figure_type を指定すべき領域。LayoutSpec で頑張って線を引くより
+    Blueprint 修正の方が読みやすくなる。本ペイントロイヤーで近似する
+    場合は、矢印は line（細長 rect）で代用、判定ノードは rect で
+    水色ハイライトなど。
 - 余白を取る（ラベルと値、カードとカード間）。
 - フォントサイズは情報階層を反映: タイトル 14-18pt, ラベル 9-11pt, 本文 10-12pt, 注記 8-9pt。
 - 色は palette token を優先（HEX 直書きは特別な強調色のみ）。

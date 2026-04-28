@@ -35,6 +35,9 @@ FigureType = Literal[
     "waterfall",
     "cost_breakdown",
     "image_slot",
+    "flowchart",
+    "spider_map",
+    "system_map",
 ]
 
 
