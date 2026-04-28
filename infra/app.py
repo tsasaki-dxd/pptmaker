@@ -40,7 +40,15 @@ from stacks.pipeline_stack import PipelineStack
 app = cdk.App()
 
 account = os.environ.get("CDK_DEFAULT_ACCOUNT")
-region = os.environ.get("CDK_DEFAULT_REGION", "ap-northeast-1")
+
+# Each stack pins its own region. Don't read CDK_DEFAULT_REGION here:
+# `cdk bootstrap aws://<acct>/us-east-1` sets CDK_DEFAULT_REGION to
+# us-east-1, and if AppStack picked that up it would try to synth its
+# VPC (whose AZs are hardcoded `ap-northeast-1a/c`) for us-east-1 and
+# fail with "Given VPC availabilityZones must be a subset of the
+# stack's availability zones".
+APP_REGION = "ap-northeast-1"
+CERT_REGION = "us-east-1"  # CloudFront cert requirement
 
 # Pre-populate the AZ context cache so that `Stack.availability_zones`
 # does not issue a `DescribeAvailabilityZones` call during synth. In CI
@@ -48,12 +56,13 @@ region = os.environ.get("CDK_DEFAULT_REGION", "ap-northeast-1")
 # credentials, which would otherwise fail with "Need to perform AWS
 # calls for account ..., but no credentials have been configured".
 if account:
-    app.node.set_context(
-        f"availability-zones:account={account}:region={region}",
-        [f"{region}a", f"{region}c"],
-    )
+    for region in (APP_REGION, CERT_REGION):
+        app.node.set_context(
+            f"availability-zones:account={account}:region={region}",
+            [f"{region}a", f"{region}c"],
+        )
 
-env = cdk.Environment(account=account, region=region)
+app_env = cdk.Environment(account=account, region=APP_REGION)
 
 # Custom-domain feature flag. Empty / unset = current behavior
 # (public S3 website, no CloudFront). Set in cdk.json -> context, or
@@ -68,16 +77,16 @@ if custom_domain:
         domain_name=custom_domain,
         # CloudFront requires the cert to live in us-east-1 regardless
         # of where the distribution is consumed.
-        env=cdk.Environment(account=account, region="us-east-1"),
+        env=cdk.Environment(account=account, region=CERT_REGION),
         cross_region_references=True,
     )
 
-PipelineStack(app, "SlideForgePipelineStack", env=env)
+PipelineStack(app, "SlideForgePipelineStack", env=app_env)
 
 AppStack(
     app,
     "App-prod",
-    env=env,
+    env=app_env,
     stage_name="prod",
     custom_domain=custom_domain,
     custom_domain_certificate=cert_stack.certificate if cert_stack else None,
