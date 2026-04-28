@@ -13,6 +13,7 @@ from ..auth import current_user_id, require_tenant
 from ..models.db import (
     BlueprintJobRow,
     BlueprintRow,
+    ImageAssetRow,
     OutputRow,
     ProjectRow,
     RevisionJobRow,
@@ -102,6 +103,18 @@ def delete_project(
         db.query(OutputRow).filter(OutputRow.blueprint_id.in_(bp_ids)).delete(
             synchronize_session=False
         )
+    # All four of these have a FK on projects.id, so they must be
+    # cleared before deleting the ProjectRow itself or PostgreSQL
+    # rejects the parent delete with IntegrityError -> 500. Missing
+    # any one of them is a stealth bug that only surfaces on projects
+    # that actually exercised the corresponding feature (e.g. revise,
+    # image upload).
+    db.query(RevisionJobRow).filter(RevisionJobRow.project_id == project_id).delete(
+        synchronize_session=False
+    )
+    db.query(ImageAssetRow).filter(ImageAssetRow.project_id == project_id).delete(
+        synchronize_session=False
+    )
     db.query(BlueprintJobRow).filter(BlueprintJobRow.project_id == project_id).delete(
         synchronize_session=False
     )

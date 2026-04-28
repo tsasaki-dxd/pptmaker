@@ -170,6 +170,73 @@ def test_template_delete_requires_admin(client: TestClient) -> None:
         assert r.json()["deleted"] == template_id
 
 
+def test_delete_project_cleans_revision_jobs_and_images(client: TestClient) -> None:
+    """Regression: a project that exercised /revise or /images would leave
+    RevisionJobRow / ImageAssetRow rows behind, both of which have a FK
+    on projects.id. Without explicit cleanup, deleting the parent row hits
+    IntegrityError and the API returns 500.
+
+    SQLite doesn't enforce FKs by default so this test asserts the child
+    rows are gone post-delete (production Postgres also requires this).
+    """
+    template_id = _make_template(client)
+
+    with _as(_claims("user-alice")):
+        r = client.post(
+            "/api/projects",
+            json={"name": "P", "template_id": template_id},
+        )
+        project_id = r.json()["id"]
+
+    # Seed a RevisionJobRow + ImageAssetRow directly against the project.
+    from api.models.db import ImageAssetRow, RevisionJobRow, new_session
+
+    db = new_session()
+    try:
+        db.add(
+            RevisionJobRow(
+                project_id=project_id,
+                tenant_id="local-tenant",
+                instruction="test",
+                status="complete",
+            )
+        )
+        db.add(
+            ImageAssetRow(
+                tenant_id="local-tenant",
+                project_id=project_id,
+                s3_key=f"originals/local-tenant/{project_id}/asset-1.png",
+                mime="image/png",
+                bytes=1024,
+            )
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    with _as(_claims("user-alice")):
+        r = client.delete(f"/api/projects/{project_id}")
+        assert r.status_code == 200, r.text
+
+    # Both child tables must be empty for this project.
+    db = new_session()
+    try:
+        assert (
+            db.query(RevisionJobRow)
+            .filter(RevisionJobRow.project_id == project_id)
+            .count()
+            == 0
+        )
+        assert (
+            db.query(ImageAssetRow)
+            .filter(ImageAssetRow.project_id == project_id)
+            .count()
+            == 0
+        )
+    finally:
+        db.close()
+
+
 def test_duplicate_assigns_new_owner(client: TestClient) -> None:
     """Duplicating someone else's project is impossible (404), and
     duplicating your own legacy NULL-owner project transfers ownership
