@@ -5,6 +5,7 @@ import { Suspense, useCallback, useEffect, useState } from 'react';
 
 import {
   api,
+  figureTypeLabel,
   FIGURE_TYPES,
   type Blueprint,
   type FigureType,
@@ -692,12 +693,12 @@ function SlideCard(props: {
               }}
               disabled={disabled}
               className="rounded border border-purple-lt px-1 py-0.5 text-xs"
-              aria-label={`スライド ${slide.index} の figure_type`}
+              aria-label={`スライド ${slide.index} の図種`}
             >
               <option value="">— 自動 —</option>
               {FIGURE_TYPES.map((ft) => (
                 <option key={ft} value={ft}>
-                  {ft}
+                  {figureTypeLabel(ft)}
                 </option>
               ))}
             </select>
@@ -705,7 +706,7 @@ function SlideCard(props: {
         ) : (
           slide.figure_type && (
             <span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-800">
-              {slide.figure_type}
+              {figureTypeLabel(slide.figure_type)}
             </span>
           )
         )}

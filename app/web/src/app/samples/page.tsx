@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from 'react';
 
+import { figureTypeLabel } from '@/lib/api';
+
 type Sample = {
   id: string;
   figure_type: string;
@@ -81,7 +83,7 @@ export default function SamplesPage() {
               const n = samples?.filter((s) => s.figure_type === ft).length ?? 0;
               return (
                 <option key={ft} value={ft}>
-                  {ft} ({n})
+                  {figureTypeLabel(ft)} ({n})
                 </option>
               );
             })}
@@ -138,8 +140,8 @@ export default function SamplesPage() {
             </div>
             <div className="space-y-1.5 px-4 py-3">
               <div className="flex items-center gap-2">
-                <span className="rounded-full bg-purple/10 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-purple-dk">
-                  {s.figure_type}
+                <span className="rounded-full bg-purple/10 px-2 py-0.5 text-xs font-medium tracking-wide text-purple-dk">
+                  {figureTypeLabel(s.figure_type)}
                 </span>
                 <h3 className="text-sm font-bold text-purple-dk">{s.title}</h3>
               </div>
@@ -184,8 +186,8 @@ function SampleDetail({ sample, onClose }: { sample: Sample; onClose: () => void
 
         <div className="space-y-4">
           <div className="flex items-center gap-3">
-            <span className="rounded-full bg-purple/10 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-purple-dk">
-              {sample.figure_type}
+            <span className="rounded-full bg-purple/10 px-2 py-0.5 text-xs font-medium tracking-wide text-purple-dk">
+              {figureTypeLabel(sample.figure_type)}
             </span>
             <h3 className="text-xl font-bold text-purple-dk">{sample.title}</h3>
           </div>
