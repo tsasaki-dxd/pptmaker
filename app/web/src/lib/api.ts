@@ -109,6 +109,20 @@ export interface BlueprintJob {
   created_at?: string | null;
 }
 
+/** Same shape as BlueprintJob but tracking a revision rather than a
+ *  brand-new blueprint. The new BlueprintRow's id appears in
+ *  `blueprint_id` once the worker finishes. */
+export type RevisionJobStatus = 'pending' | 'complete' | 'failed';
+
+export interface RevisionJob {
+  job_id: string;
+  project_id: string;
+  status: RevisionJobStatus;
+  blueprint_id?: string | null;
+  error?: string | null;
+  created_at?: string | null;
+}
+
 export const api = {
   health: () => request<{ status: string }>('/health'),
   listTemplates: () => request<TemplateProfile[]>('/api/templates'),
@@ -156,12 +170,17 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ mappings }),
     }),
+  /**
+   * Enqueue a revision job. The server returns immediately with a
+   * RevisionJob handle; poll getRevisionJob until status flips off
+   * "pending" then re-fetch the blueprint.
+   */
   revise: (
     project_id: string,
     instruction: string,
     slide_index?: number,
   ) =>
-    request<{ id: string; patch: unknown[] }>(`/api/projects/${project_id}/revise`, {
+    request<RevisionJob>(`/api/projects/${project_id}/revise`, {
       method: 'POST',
       body: JSON.stringify(
         slide_index === undefined
@@ -169,6 +188,10 @@ export const api = {
           : { instruction, slide_index },
       ),
     }),
+  getRevisionJob: (project_id: string, job_id: string) =>
+    request<RevisionJob>(
+      `/api/projects/${project_id}/revise/job/${job_id}`,
+    ),
   render: (project_id: string) =>
     request<{ job_id: string; status: string }>(`/api/projects/${project_id}/render`, { method: 'POST' }),
   preview: (project_id: string, slide_index: number) =>

@@ -123,6 +123,33 @@ class BlueprintJobRow(Base):
     )
 
 
+class RevisionJobRow(Base):
+    """Async revision (per-slide / whole-deck) job.
+
+    Same lifecycle as BlueprintJobRow but the worker calls the
+    revision LLM, applies the JSON Patch, and writes a new
+    BlueprintRow + RevisionRow on success. Split out from the
+    inline /revise path because LLM latency reliably exceeds the
+    API Gateway 29s integration timeout, which left the client
+    seeing 503/400/500 even when the underlying revision had
+    actually committed.
+    """
+
+    __tablename__ = "revision_jobs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    project_id: Mapped[str] = mapped_column(String(36), ForeignKey("projects.id"), index=True)
+    tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    instruction: Mapped[str] = mapped_column(String(2000))
+    slide_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending|complete|failed
+    blueprint_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
 _engine = None
 _SessionLocal = None
 _tables_ready = False
