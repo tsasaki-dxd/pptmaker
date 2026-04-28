@@ -61,6 +61,14 @@ class PipelineStack(cdk.Stack):
             self,
             "CdkDeployProject",
             project_name="SlideForge-Deploy",
+            # Default CodeBuild timeout is 60 min. With the custom-domain
+            # path that's too tight: Cert-prod blocks on ACM DNS
+            # validation (5-30 min after CNAME is added) plus CloudFront
+            # provisioning (10-15 min) plus the usual asset publish +
+            # web sync. 2 h gives enough headroom for the operator to
+            # add the CNAME without racing the build, while keeping
+            # idle-cost negligible (~$0.30 worst case).
+            timeout=cdk.Duration.hours(2),
             environment=codebuild.BuildEnvironment(
                 build_image=codebuild.LinuxBuildImage.AMAZON_LINUX_2_5,
                 privileged=True,
