@@ -29,6 +29,17 @@ _MAX_LAYERS = 7
 _MAX_NODES_PER_LAYER = 4
 _NODE_KINDS = {"start", "end", "process", "decision", "data"}
 
+# Comfortable baseline node sizes — fit a 5-8 JP-char label plus a
+# 1-2 line note at default font sizes without auto_fit having to
+# kick in. Render uses min(baseline, available) so sparse charts
+# don't oversize and crowded charts shrink gracefully.
+_IDEAL_NODE_W = 1_550_000
+_IDEAL_NODE_H = 720_000
+# Floor so even a 7-layer by 4-parallel flow stays legible after
+# auto_fit pulls text size down.
+_MIN_NODE_W = 600_000
+_MIN_NODE_H = 280_000
+
 
 def _diamond(
     sp_id: int,
@@ -134,19 +145,44 @@ class FlowchartRenderer(FigureRenderer):
 
     figure_type = "flowchart"
     description = (
-        "Layered vertical flowchart (2-7 layers, up to 4 nodes per layer). "
+        "Layered flowchart (2-7 layers, up to 4 nodes per layer). "
+        "`direction` is `horizontal` by default (layers stretch left-to-right, "
+        "nodes within a layer stack vertically) — fits the wide slide body "
+        "better than `vertical` (set explicitly when the deck demands it). "
         "Node kinds: start/end (rounded), process (rect), decision (diamond), "
-        "data (parallelogram). "
-        "content: {layers: [[{id, label, kind?}]], edges: [{from, to, label?}]}"
+        "data (parallelogram). Each non-decision node accepts an optional "
+        "1-2 line `note` rendered in muted text below the label (responsible "
+        "team / SLA / output, etc.); decision nodes ignore note because the "
+        "diamond's inscribed area is too narrow. "
+        "content: {direction?: 'horizontal'|'vertical', "
+        "layers: [[{id, label, kind?, note?}]], "
+        "edges: [{from, to, label?}]}"
     )
     input_schema_example: ClassVar[dict[str, Any]] = {
         "layers": [
             [{"id": "s", "label": "開始", "kind": "start"}],
-            [{"id": "p1", "label": "申請内容を入力", "kind": "process"}],
+            [
+                {
+                    "id": "p1",
+                    "label": "申請内容を入力",
+                    "kind": "process",
+                    "note": "申請者 / 5分以内",
+                }
+            ],
             [{"id": "d1", "label": "金額 > 100万?", "kind": "decision"}],
             [
-                {"id": "p2", "label": "上長承認", "kind": "process"},
-                {"id": "p3", "label": "自動承認", "kind": "process"},
+                {
+                    "id": "p2",
+                    "label": "上長承認",
+                    "kind": "process",
+                    "note": "1営業日 SLA",
+                },
+                {
+                    "id": "p3",
+                    "label": "自動承認",
+                    "kind": "process",
+                    "note": "ルールベース即時",
+                },
             ],
             [{"id": "e", "label": "完了", "kind": "end"}],
         ],
@@ -215,6 +251,13 @@ class FlowchartRenderer(FigureRenderer):
         p = ctx.palette
         layers: list[list[dict[str, Any]]] = list(content["layers"])
         edges: list[dict[str, Any]] = list(content.get("edges") or [])
+        # Default to horizontal because the slide body is wide and short
+        # (about 8.4M wide by 2.8M tall in EMU). Vertical 5-layer flow
+        # squeezes each row to ~0.5 inch which can't carry a label
+        # plus a note. Caller can opt back into vertical via
+        # `direction: "vertical"` if the deck layout demands it.
+        direction = str(content.get("direction") or "horizontal").lower()
+        horizontal = direction != "vertical"
 
         n_layers = len(layers)
         margin_x = container.w // 50
@@ -225,11 +268,17 @@ class FlowchartRenderer(FigureRenderer):
         plot_w = container.w - 2 * margin_x
         plot_h = container.h - 2 * margin_y
 
-        layer_h = plot_h // n_layers
-        # Looser node sizing: shorter cards leave room for breathing space
-        # between layers and for the arrows to be visually obvious.
-        node_h = max(_i(layer_h * 0.50), 280000)
-        node_v_pad = (layer_h - node_h) // 2
+        any_note = any(
+            isinstance(n, dict)
+            and isinstance(n.get("note"), str)
+            and n["note"].strip()
+            and n.get("kind", "process") != "decision"
+            for layer in layers
+            for n in layer
+        )
+
+        # Layer advance along the flow direction.
+        layer_advance = (plot_w if horizontal else plot_h) // n_layers
 
         accent_w = max(_i(0.05 * 914400), 36000)  # ~3pt left bar.
 
@@ -241,15 +290,39 @@ class FlowchartRenderer(FigureRenderer):
 
         for li, layer in enumerate(layers):
             n = len(layer)
-            slot_w = plot_w // n
-            node_w = max(_i(slot_w * 0.88), 700000)
+            # Take min(baseline, available) so each node fits its slot
+            # but never exceeds the ideal size — and floor it so the
+            # text auto_fit has something readable to work with even
+            # at maximum density (7 layers by 4 nodes).
+            if horizontal:
+                slot_cross = plot_h // n
+                # Available room inside the slot. Use 88% so the
+                # arrows have visible spacing even at low density.
+                avail_w = max(_i(layer_advance * 0.88), _MIN_NODE_W)
+                avail_h = max(_i(slot_cross * 0.88), _MIN_NODE_H)
+                node_w = min(_IDEAL_NODE_W, avail_w)
+                ideal_h = _IDEAL_NODE_H if any_note else int(_IDEAL_NODE_H * 0.7)
+                node_h = min(ideal_h, avail_h)
+                slot_v_pad = (slot_cross - node_h) // 2
+            else:
+                slot_cross = plot_w // n
+                avail_w = max(_i(slot_cross * 0.88), _MIN_NODE_W)
+                avail_h = max(_i(layer_advance * 0.88), _MIN_NODE_H)
+                node_w = min(_IDEAL_NODE_W, avail_w)
+                ideal_h = _IDEAL_NODE_H if any_note else int(_IDEAL_NODE_H * 0.7)
+                node_h = min(ideal_h, avail_h)
+                slot_v_pad = (layer_advance - node_h) // 2
+
             for ni, node in enumerate(layer):
                 kind = node.get("kind", "process")
-                slot_x = plot_x + ni * slot_w + (slot_w - node_w) // 2
-                node_y = plot_y + li * layer_h + node_v_pad
 
-                # Diamond keeps its own (wider) bounding box so its
-                # inscribed text rectangle has room.
+                if horizontal:
+                    slot_x = plot_x + li * layer_advance + (layer_advance - node_w) // 2
+                    slot_y = plot_y + ni * slot_cross + slot_v_pad
+                else:
+                    slot_x = plot_x + ni * slot_cross + (slot_cross - node_w) // 2
+                    slot_y = plot_y + li * layer_advance + slot_v_pad
+
                 if kind == "decision":
                     diamond_w = min(node_w, _i(node_h * 1.7))
                     slot_x += (node_w - diamond_w) // 2
@@ -257,22 +330,19 @@ class FlowchartRenderer(FigureRenderer):
                 else:
                     used_w = node_w
 
-                # Per-kind palette. Process/data lean white-on-purple
-                # accent, start/end are the brand color, decision is
-                # amber to call attention to the branch.
                 if kind in ("start", "end"):
                     fill = p.purple_dk
                     text_color = "FFFFFF"
-                    accent_color = None  # the body itself is the accent
+                    accent_color = None
                 elif kind == "decision":
-                    fill = "FFF6E6"  # warm white tint
+                    fill = "FFF6E6"
                     text_color = p.black
                     accent_color = p.amber
                 elif kind == "data":
                     fill = "F4F2FA"
                     text_color = p.black
                     accent_color = p.purple_lt
-                else:  # process
+                else:
                     fill = "FFFFFF"
                     text_color = p.black
                     accent_color = p.purple_dk
@@ -283,7 +353,7 @@ class FlowchartRenderer(FigureRenderer):
                             sid,
                             f"fc-{node['id']}",
                             slot_x,
-                            node_y,
+                            slot_y,
                             used_w,
                             node_h,
                             fill,
@@ -298,7 +368,7 @@ class FlowchartRenderer(FigureRenderer):
                             sid,
                             f"fc-{node['id']}",
                             slot_x,
-                            node_y,
+                            slot_y,
                             used_w,
                             node_h,
                             fill,
@@ -312,7 +382,7 @@ class FlowchartRenderer(FigureRenderer):
                             sid,
                             f"fc-{node['id']}",
                             slot_x,
-                            node_y,
+                            slot_y,
                             used_w,
                             node_h,
                             fill,
@@ -325,7 +395,7 @@ class FlowchartRenderer(FigureRenderer):
                             sid,
                             f"fc-{node['id']}",
                             slot_x,
-                            node_y,
+                            slot_y,
                             used_w,
                             node_h,
                             fill,
@@ -335,15 +405,12 @@ class FlowchartRenderer(FigureRenderer):
                     )
                     sid += 1
                     if accent_color is not None:
-                        # Thin colored bar on the leftmost edge.
-                        # Drawn as plain rect (no rounding) so it tucks
-                        # behind the card's rounded corners visually.
                         shapes.append(
                             rect_shape(
                                 sid,
                                 f"fc-acc-{node['id']}",
                                 slot_x,
-                                node_y,
+                                slot_y,
                                 accent_w,
                                 node_h,
                                 accent_color,
@@ -351,35 +418,80 @@ class FlowchartRenderer(FigureRenderer):
                         )
                         sid += 1
 
-                # Label centered with a healthy inset so JP text
-                # doesn't kiss the rounded corners.
                 if kind == "decision":
                     text_x = slot_x + used_w // 6
                     text_w = used_w * 2 // 3
                 else:
                     text_x = slot_x + accent_w + 100000
                     text_w = used_w - accent_w - 200000
-                shapes.append(
-                    text_box(
-                        sid,
-                        f"fc-lbl-{node['id']}",
-                        text_x,
-                        node_y + 40000,
-                        text_w,
-                        node_h - 80000,
-                        node["label"],
-                        size_pt=11,
-                        bold=kind in ("start", "end", "decision"),
-                        color=text_color,
-                        font=ctx.font,
-                        align="ctr",
-                        auto_fit=True,
-                    )
+
+                note_raw = node.get("note") if kind != "decision" else None
+                note = (
+                    note_raw.strip()
+                    if isinstance(note_raw, str) and note_raw.strip()
+                    else ""
                 )
+                if note:
+                    label_h = _i(node_h * 0.45)
+                    note_y = slot_y + label_h
+                    note_h = node_h - label_h - 40000
+                    shapes.append(
+                        text_box(
+                            sid,
+                            f"fc-lbl-{node['id']}",
+                            text_x,
+                            slot_y + 30000,
+                            text_w,
+                            label_h - 30000,
+                            node["label"],
+                            size_pt=11,
+                            bold=kind in ("start", "end"),
+                            color=text_color,
+                            font=ctx.font,
+                            align="ctr",
+                            auto_fit=True,
+                        )
+                    )
+                    sid += 1
+                    note_color = "FFFFFF" if kind in ("start", "end") else p.muted
+                    shapes.append(
+                        text_box(
+                            sid,
+                            f"fc-note-{node['id']}",
+                            text_x,
+                            note_y,
+                            text_w,
+                            note_h,
+                            note,
+                            size_pt=8,
+                            color=note_color,
+                            font=ctx.font,
+                            align="ctr",
+                            auto_fit=True,
+                        )
+                    )
+                else:
+                    shapes.append(
+                        text_box(
+                            sid,
+                            f"fc-lbl-{node['id']}",
+                            text_x,
+                            slot_y + 40000,
+                            text_w,
+                            node_h - 80000,
+                            node["label"],
+                            size_pt=11,
+                            bold=kind in ("start", "end", "decision"),
+                            color=text_color,
+                            font=ctx.font,
+                            align="ctr",
+                            auto_fit=True,
+                        )
+                    )
                 sid += 1
 
-                centers[node["id"]] = (slot_x + used_w // 2, node_y + node_h // 2)
-                bboxes[node["id"]] = (slot_x, node_y, used_w, node_h)
+                centers[node["id"]] = (slot_x + used_w // 2, slot_y + node_h // 2)
+                bboxes[node["id"]] = (slot_x, slot_y, used_w, node_h)
 
         for ei, e in enumerate(edges):
             src, dst = e["from"], e["to"]
@@ -388,16 +500,33 @@ class FlowchartRenderer(FigureRenderer):
             sx, sy, sw, sh = bboxes[src]
             dx, dy, dw, dh = bboxes[dst]
             sx_c = sx + sw // 2
+            sy_c = sy + sh // 2
             dx_c = dx + dw // 2
-            if sy + sh <= dy:
-                start = (sx_c, sy + sh)
-                end = (dx_c, dy)
-            elif dy + dh <= sy:
-                start = (sx_c, sy)
-                end = (dx_c, dy + dh)
-            else:
-                start = centers[src]
-                end = centers[dst]
+            dy_c = dy + dh // 2
+
+            if horizontal:
+                if sx + sw <= dx:
+                    # forward (left → right)
+                    start = (sx + sw, sy_c)
+                    end = (dx, dy_c)
+                elif dx + dw <= sx:
+                    # backward (right → left, e.g. retry loop)
+                    start = (sx, sy_c)
+                    end = (dx + dw, dy_c)
+                else:
+                    start = centers[src]
+                    end = centers[dst]
+            else:  # vertical
+                if sy + sh <= dy:
+                    start = (sx_c, sy + sh)
+                    end = (dx_c, dy)
+                elif dy + dh <= sy:
+                    start = (sx_c, sy)
+                    end = (dx_c, dy + dh)
+                else:
+                    start = centers[src]
+                    end = centers[dst]
+
             shapes.append(
                 _arrow(
                     sid,
@@ -414,8 +543,6 @@ class FlowchartRenderer(FigureRenderer):
 
             label = e.get("label")
             if label:
-                # Edge labels sit on a tiny white pill so they don't
-                # collide with the connector underneath.
                 mid_x = (start[0] + end[0]) // 2
                 mid_y = (start[1] + end[1]) // 2
                 lbl_w = 480000

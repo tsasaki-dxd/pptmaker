@@ -861,17 +861,42 @@ SAMPLES: list[Sample] = [
         id="flowchart_approval",
         figure_type="flowchart",
         title="申請承認フロー",
-        prompt="申請→金額判定→承認 or 自動承認 の業務フローを判断分岐つきで",
+        prompt="申請→金額判定→承認の業務フローを横向きに、各ステップの担当 / SLA も添える",
         figure_content={
+            "direction": "horizontal",
             "layers": [
                 [{"id": "s", "label": "開始", "kind": "start"}],
-                [{"id": "p1", "label": "申請内容を入力", "kind": "process"}],
+                [
+                    {
+                        "id": "p1",
+                        "label": "申請内容を入力",
+                        "kind": "process",
+                        "note": "申請者 / 5分以内",
+                    }
+                ],
                 [{"id": "d1", "label": "金額 > 100万?", "kind": "decision"}],
                 [
-                    {"id": "p2", "label": "上長承認", "kind": "process"},
-                    {"id": "p3", "label": "自動承認", "kind": "process"},
+                    {
+                        "id": "p2",
+                        "label": "上長承認",
+                        "kind": "process",
+                        "note": "1営業日 SLA",
+                    },
+                    {
+                        "id": "p3",
+                        "label": "自動承認",
+                        "kind": "process",
+                        "note": "ルールベース即時",
+                    },
                 ],
-                [{"id": "p4", "label": "システム反映", "kind": "process"}],
+                [
+                    {
+                        "id": "p4",
+                        "label": "システム反映",
+                        "kind": "process",
+                        "note": "ERP 連携",
+                    }
+                ],
                 [{"id": "e", "label": "完了", "kind": "end"}],
             ],
             "edges": [
@@ -884,7 +909,7 @@ SAMPLES: list[Sample] = [
                 {"from": "p4", "to": "e"},
             ],
         },
-        notes="flowchart — 開始/終了は丸枠、判定は ◇、process は四角。",
+        notes="flowchart — 横方向 (direction=horizontal)、process に note (担当・SLA)。",
     ),
     Sample(
         id="spider_map_dx",
@@ -906,7 +931,7 @@ SAMPLES: list[Sample] = [
         id="system_map_arch",
         figure_type="system_map",
         title="アーキテクチャ概観",
-        prompt="フロント / バックエンド / 外部システム の 3 グループ構成と矢印で関係",
+        prompt="フロント / バックエンド / 外部システムの構成。各サービスに技術的特徴も短く添える",
         figure_content={
             "groups": [
                 {
@@ -919,9 +944,24 @@ SAMPLES: list[Sample] = [
                 {
                     "name": "バックエンド",
                     "items": [
-                        {"id": "api", "label": "API", "sub": "FastAPI"},
-                        {"id": "worker", "label": "Worker", "sub": "SQS"},
-                        {"id": "db", "label": "DB", "sub": "PostgreSQL"},
+                        {
+                            "id": "api",
+                            "label": "API",
+                            "sub": "FastAPI",
+                            "notes": ["Cognito JWT", "RDS Proxy 経由"],
+                        },
+                        {
+                            "id": "worker",
+                            "label": "Worker",
+                            "sub": "SQS",
+                            "notes": ["DLQ 2回再送", "可視性 6分"],
+                        },
+                        {
+                            "id": "db",
+                            "label": "DB",
+                            "sub": "PostgreSQL",
+                            "notes": ["Multi-AZ", "PITR 7日"],
+                        },
                     ],
                 },
                 {
@@ -941,6 +981,233 @@ SAMPLES: list[Sample] = [
                 {"from": "worker", "to": "ses"},
             ],
         },
-        notes="system_map — グループ列 + ノードカード + コネクタ。",
+        notes="system_map — グループ列 + ノードカードに notes (技術特徴) を bullet で。",
+    ),
+    Sample(
+        id="value_flow_ecosystem",
+        figure_type="value_flow",
+        title="エコシステム商流 (5 者)",
+        prompt="顧客・自社・出店者・物流・決済の 5 者の商流を一枚で",
+        figure_content={
+            "actors": [
+                {"id": "cust", "label": "顧客", "role": "個人 / 法人"},
+                {
+                    "id": "us",
+                    "label": "自社",
+                    "role": "プラットフォーム",
+                    "primary": True,
+                    "note": "GMV 12% 手数料",
+                },
+                {"id": "ptr", "label": "出店者", "role": "サプライヤ"},
+                {"id": "log", "label": "物流", "role": "委託先"},
+                {"id": "pay", "label": "決済", "role": "PSP"},
+            ],
+            "flows": [
+                {"from": "cust", "to": "us", "label": "利用料", "kind": "money"},
+                {"from": "us", "to": "cust", "label": "サービス", "kind": "goods"},
+                {"from": "us", "to": "ptr", "label": "売上 (手数料控除後)", "kind": "money"},
+                {"from": "ptr", "to": "us", "label": "在庫データ", "kind": "info"},
+                {"from": "us", "to": "log", "label": "配送委託料", "kind": "money"},
+                {"from": "log", "to": "cust", "label": "商品配送", "kind": "goods"},
+                {"from": "us", "to": "pay", "label": "決済手数料", "kind": "money"},
+                {"from": "pay", "to": "us", "label": "決済 OK", "kind": "info"},
+            ],
+        },
+        notes="value_flow — 5 アクター (五角形配置) + 8 本の typed flows。",
+    ),
+    Sample(
+        id="value_flow_marketplace",
+        figure_type="value_flow",
+        title="マーケットプレイス商流",
+        prompt="顧客・自社・出店者の 3 者間の商流 + 各アクターのビジネス情報",
+        figure_content={
+            "actors": [
+                {
+                    "id": "cust",
+                    "label": "顧客",
+                    "role": "個人 / 法人",
+                    "note": "国内 50万 MAU",
+                },
+                {
+                    "id": "us",
+                    "label": "自社",
+                    "role": "プラットフォーム",
+                    "primary": True,
+                    "note": "GMV の 12% が手数料収入",
+                },
+                {
+                    "id": "ptr",
+                    "label": "出店者",
+                    "role": "サプライヤ",
+                    "note": "1,200 事業者",
+                },
+            ],
+            "flows": [
+                {"from": "cust", "to": "us", "label": "利用料", "kind": "money"},
+                {"from": "us", "to": "cust", "label": "サービス提供", "kind": "goods"},
+                {"from": "us", "to": "ptr", "label": "売上 (手数料控除後)", "kind": "money"},
+                {"from": "ptr", "to": "us", "label": "在庫データ", "kind": "info"},
+                {"from": "ptr", "to": "cust", "label": "商品配送", "kind": "goods"},
+            ],
+        },
+        notes="value_flow — 3者間 + アクターごとに note (規模・収益モデル等)。",
+    ),
+    Sample(
+        id="value_chain_porter",
+        figure_type="value_chain",
+        title="バリューチェーン",
+        prompt="各活動に分析×指標 (理想値) の対比、利益に AsIs/ToBe を入れる",
+        figure_content={
+            "primary": [
+                {
+                    "label": "購買物流",
+                    "items": ["JIT 化 (在庫日数 7→3)", "複数社購買 30%"],
+                },
+                {
+                    "label": "製造",
+                    "items": ["自動化率 60%", "歩留り 95→98%"],
+                },
+                {
+                    "label": "出荷物流",
+                    "items": ["翌日着 90%", "誤配 < 0.1%"],
+                },
+                {
+                    "label": "販売・マーケ",
+                    "items": ["LTV +20%", "CAC -15%"],
+                },
+                {
+                    "label": "サービス",
+                    "items": ["解約率 < 1%", "NPS 50+"],
+                },
+            ],
+            "support": [
+                {"label": "企業インフラ", "items": ["ガバナンス再整備"]},
+                {"label": "人材管理", "items": ["スキル可視化"]},
+                "技術開発",
+                "調達",
+            ],
+            "margin_label": {
+                "label": "利益",
+                "items": [
+                    "AsIs: 営業利益率 8%",
+                    "ToBe: 12% (+4pt)",
+                    "業界中央値 10%",
+                ],
+            },
+        },
+        notes="value_chain — 各活動: 分析×指標 / 利益: AsIs vs ToBe。",
+    ),
+    Sample(
+        id="scheme_diagram_spc",
+        figure_type="scheme_diagram",
+        title="SPC スキーム図",
+        prompt="不動産 SPC を中心とした関係者間の契約 / 出資 / 配当の関係を一枚で",
+        figure_content={
+            "actors": [
+                {
+                    "id": "spc",
+                    "label": "SPC",
+                    "region": "center",
+                    "primary": True,
+                    "sub": "特別目的会社",
+                },
+                {"id": "bank", "label": "金融機関", "region": "left"},
+                {"id": "lp", "label": "投資家 LP", "region": "left"},
+                {"id": "gp", "label": "投資家 GP", "region": "left"},
+                {"id": "dev", "label": "デベロッパー", "region": "right"},
+                {"id": "op", "label": "運営会社", "region": "right"},
+                {"id": "am", "label": "アセットマネージャー", "region": "top"},
+                {"id": "user", "label": "エンドユーザー", "region": "bottom"},
+            ],
+            "groups": [
+                {"name": "投資家", "members": ["lp", "gp"], "accent": "purple_lt"},
+                {"name": "事業会社", "members": ["dev", "op"], "accent": "amber"},
+            ],
+            "flows": [
+                {"from": "bank", "to": "spc", "label": "融資契約", "kind": "contract"},
+                {"from": "spc", "to": "bank", "label": "返済", "kind": "money"},
+                {"from": "lp", "to": "spc", "label": "出資", "kind": "money"},
+                {"from": "spc", "to": "lp", "label": "配当", "kind": "money"},
+                {"from": "gp", "to": "spc", "label": "出資 / 運営", "kind": "money"},
+                {"from": "dev", "to": "spc", "label": "売買契約", "kind": "contract"},
+                {"from": "spc", "to": "op", "label": "運営委託", "kind": "contract"},
+                {"from": "user", "to": "op", "label": "対価", "kind": "money"},
+                {"from": "am", "to": "spc", "label": "資産管理", "kind": "info"},
+            ],
+        },
+        notes="scheme_diagram — 中心 SPC + 左右にステークホルダー + groups で投資家/事業会社をクラスタ化。L字コネクタ。",
+    ),
+    Sample(
+        id="scheme_diagram_pfi",
+        figure_type="scheme_diagram",
+        title="PFI プロジェクトファイナンス",
+        prompt="公共主体・PFI事業者(SPC)・出資企業・設計/建設/運営会社・金融機関・利用者の典型構造",
+        figure_content={
+            "actors": [
+                {
+                    "id": "spc",
+                    "label": "PFI 事業者",
+                    "region": "center",
+                    "primary": True,
+                    "sub": "特別目的会社 (SPC)",
+                },
+                {"id": "gov", "label": "公共主体", "region": "top"},
+                {"id": "user", "label": "利用者", "region": "bottom"},
+                {"id": "bank", "label": "金融機関", "region": "left"},
+                {"id": "inv1", "label": "出資企業 A", "region": "left"},
+                {"id": "inv2", "label": "出資企業 B", "region": "left"},
+                {"id": "design", "label": "設計会社", "region": "right"},
+                {"id": "build", "label": "建設会社", "region": "right"},
+                {"id": "op", "label": "運営会社", "region": "right"},
+            ],
+            "groups": [
+                {
+                    "name": "出資企業",
+                    "members": ["inv1", "inv2"],
+                    "accent": "purple_lt",
+                },
+                {
+                    "name": "事業会社",
+                    "members": ["design", "build", "op"],
+                    "accent": "amber",
+                },
+            ],
+            "flows": [
+                {"from": "gov", "to": "spc", "label": "事業契約", "kind": "contract"},
+                {"from": "spc", "to": "gov", "label": "サービス提供", "kind": "goods"},
+                {"from": "user", "to": "spc", "label": "利用料", "kind": "money"},
+                {"from": "spc", "to": "user", "label": "サービス", "kind": "goods"},
+                {"from": "bank", "to": "spc", "label": "融資", "kind": "contract"},
+                {"from": "spc", "to": "bank", "label": "元利金返済", "kind": "money"},
+                {"from": "inv1", "to": "spc", "label": "出資", "kind": "money"},
+                {"from": "inv2", "to": "spc", "label": "出資", "kind": "money"},
+                {"from": "spc", "to": "design", "label": "設計委託", "kind": "contract"},
+                {"from": "spc", "to": "build", "label": "建設請負", "kind": "contract"},
+                {"from": "spc", "to": "op", "label": "運営委託", "kind": "contract"},
+            ],
+        },
+        notes="scheme_diagram — PFI 典型構造。9 actors + 2 groups + 11 flows。",
+    ),
+    Sample(
+        id="business_canvas_saas",
+        figure_type="business_canvas",
+        title="ビジネスモデルキャンバス",
+        prompt="SaaS 事業のビジネスモデルキャンバス (9 ボックス)",
+        figure_content={
+            "key_partners": ["AWS", "決済プロバイダ", "OEM パートナー"],
+            "key_activities": ["プラットフォーム開発", "顧客サポート"],
+            "key_resources": ["技術者チーム", "顧客データ"],
+            "value_propositions": [
+                "短納期 (4週間)",
+                "投資回収 12ヶ月",
+                "国内 50社の実績",
+            ],
+            "customer_relationships": ["CSM 専任", "オンラインコミュニティ"],
+            "channels": ["直販", "代理店", "Web セルフサーブ"],
+            "customer_segments": ["中堅製造業", "公共"],
+            "cost_structure": ["人件費 60%", "クラウド 20%", "営業 15%"],
+            "revenue_streams": ["月額サブスク", "従量課金", "コンサル"],
+        },
+        notes="business_canvas — Osterwalder 9 ボックスの定型レイアウト。",
     ),
 ]

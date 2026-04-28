@@ -38,6 +38,10 @@ FigureType = Literal[
     "flowchart",
     "spider_map",
     "system_map",
+    "value_flow",
+    "value_chain",
+    "business_canvas",
+    "scheme_diagram",
 ]
 
 

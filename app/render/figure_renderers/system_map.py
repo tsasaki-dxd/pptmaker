@@ -22,13 +22,23 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..shapes import _i, _xml_escape, rect_shape, round_rect_shape, text_box
+from ..shapes import (
+    TextParagraph,
+    TextRun,
+    _i,
+    _xml_escape,
+    rect_shape,
+    round_rect_shape,
+    text_box,
+    text_box_paragraphs,
+)
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
 _MIN_GROUPS = 2
 _MAX_GROUPS = 5
 _MAX_ITEMS_PER_GROUP = 6
+_MAX_NOTES_PER_ITEM = 4
 
 _GROUP_ACCENTS = ("purple_dk", "amber", "green", "purple_lt", "muted")
 
@@ -76,7 +86,11 @@ class SystemMapRenderer(FigureRenderer):
     description = (
         "System / architecture map. Groups become columns; each group has up to 6 "
         "item cards stacked vertically. Connections draw arrows between item IDs. "
-        "content: {groups: [{name, items: [{id, label, sub?}]}], "
+        "Each item card optionally carries a 1-line `sub` (tech / role) and a "
+        "list of `notes` (up to 4 bullet items rendered below); when any item "
+        "in a group has notes, every card in that group gets taller so the "
+        "row heights stay aligned. "
+        "content: {groups: [{name, items: [{id, label, sub?, notes?: [str]}]}], "
         "connections: [{from, to, label?, arrow?}]}"
     )
     input_schema_example: ClassVar[dict[str, Any]] = {
@@ -91,8 +105,18 @@ class SystemMapRenderer(FigureRenderer):
             {
                 "name": "バックエンド",
                 "items": [
-                    {"id": "api", "label": "API", "sub": "FastAPI"},
-                    {"id": "worker", "label": "Worker", "sub": "SQS"},
+                    {
+                        "id": "api",
+                        "label": "API",
+                        "sub": "FastAPI",
+                        "notes": ["Cognito 認可", "RDS Proxy 経由"],
+                    },
+                    {
+                        "id": "worker",
+                        "label": "Worker",
+                        "sub": "SQS",
+                        "notes": ["DLQ 2回再送", "可視性 6分"],
+                    },
                     {"id": "db", "label": "DB", "sub": "PostgreSQL"},
                 ],
             },
@@ -145,6 +169,17 @@ class SystemMapRenderer(FigureRenderer):
                 if iid in all_ids:
                     errors.append(f"duplicate item id: {iid}")
                 all_ids.add(iid)
+                notes = it.get("notes")
+                if notes is not None:
+                    if not isinstance(notes, list):
+                        errors.append(
+                            f"groups[{gi}].items[{ii}].notes must be list"
+                        )
+                    elif len(notes) > _MAX_NOTES_PER_ITEM:
+                        errors.append(
+                            f"groups[{gi}].items[{ii}].notes must have <= "
+                            f"{_MAX_NOTES_PER_ITEM} entries"
+                        )
 
         connections = content.get("connections", [])
         if not isinstance(connections, list):
@@ -224,8 +259,18 @@ class SystemMapRenderer(FigureRenderer):
             content_top = gy + title_h
             content_h = gh - title_h - 60000
             slot_h = content_h // n_items
-            card_h = max(_i(slot_h * 0.78), 360000)
-            slot_v_pad = (slot_h - card_h) // 2
+            # Cards grow if any item in this group has notes — keeps
+            # rows uniform inside the group while leaving room for
+            # bullet text.
+            group_has_notes = any(
+                isinstance(it.get("notes"), list) and any(
+                    isinstance(n, str) and n.strip() for n in it["notes"]
+                )
+                for it in items
+            )
+            card_h_pct = 0.92 if group_has_notes else 0.78
+            card_h = max(_i(slot_h * card_h_pct), 480000 if group_has_notes else 360000)
+            slot_v_pad = max((slot_h - card_h) // 2, 0)
             card_x = gx
             card_w = group_w
 
@@ -261,9 +306,86 @@ class SystemMapRenderer(FigureRenderer):
                 sid += 1
 
                 sub = it.get("sub")
+                notes_raw = it.get("notes")
+                notes = (
+                    [str(n).strip() for n in notes_raw if isinstance(n, str) and n.strip()]
+                    if isinstance(notes_raw, list)
+                    else []
+                )
                 inset_x = card_x + accent_w + 80000
                 inset_w = card_w - accent_w - 160000
-                if sub:
+                if notes:
+                    # label / sub / bullet notes — all stacked. Card
+                    # height was already grown when any item carried
+                    # notes (see card_h compute above).
+                    label_h = _i(card_h * 0.22)
+                    sub_h = _i(card_h * 0.16) if sub else 0
+                    notes_y = cy + 30000 + label_h + sub_h
+                    notes_h = card_h - (notes_y - cy) - 20000
+                    shapes.append(
+                        text_box(
+                            sid,
+                            f"sysmap-card-lbl-{it['id']}",
+                            inset_x,
+                            cy + 30000,
+                            inset_w,
+                            label_h,
+                            it["label"],
+                            size_pt=12,
+                            bold=True,
+                            color=p.black,
+                            font=ctx.font,
+                            align="l",
+                        )
+                    )
+                    sid += 1
+                    if sub:
+                        shapes.append(
+                            text_box(
+                                sid,
+                                f"sysmap-card-sub-{it['id']}",
+                                inset_x,
+                                cy + 30000 + label_h,
+                                inset_w,
+                                sub_h,
+                                str(sub),
+                                size_pt=8,
+                                color=p.muted,
+                                font=ctx.font,
+                                align="l",
+                            )
+                        )
+                        sid += 1
+                    paragraphs = [
+                        TextParagraph(
+                            runs=(
+                                TextRun(
+                                    text="・ " + n,
+                                    size_pt=8,
+                                    color=p.dark,
+                                ),
+                            ),
+                            align="l",
+                            space_before_pt=2,
+                        )
+                        for n in notes[:_MAX_NOTES_PER_ITEM]
+                    ]
+                    shapes.append(
+                        text_box_paragraphs(
+                            sid,
+                            f"sysmap-card-notes-{it['id']}",
+                            inset_x,
+                            notes_y,
+                            inset_w,
+                            notes_h,
+                            paragraphs,
+                            font=ctx.font,
+                            anchor="t",
+                            auto_fit=True,
+                        )
+                    )
+                    sid += 1
+                elif sub:
                     shapes.append(
                         text_box(
                             sid,
