@@ -8,7 +8,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from ..auth import require_tenant
+from ..auth import require_admin, require_tenant
 from ..models.db import ProjectRow, TemplateProfileRow, get_session
 from ..models.schemas import TemplateCreateResponse, TemplateProfile
 from ..services.storage import Storage
@@ -113,8 +113,13 @@ def get_template(
 def delete_template(
     template_id: str,
     tenant_id: str = Depends(require_tenant),
+    _admin: dict = Depends(require_admin),
     db: Session = Depends(get_session),
 ) -> dict:
+    # Admin-only: templates are tenant-shared, so a single user
+    # mis-clicking would yank the template out from under everyone else.
+    # Users in the Cognito `admin` group (e.g. tsasaki@dx-design.co.jp)
+    # are the only ones allowed to delete.
     row = (
         db.query(TemplateProfileRow)
         .filter(TemplateProfileRow.id == template_id, TemplateProfileRow.tenant_id == tenant_id)

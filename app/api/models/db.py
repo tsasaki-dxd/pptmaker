@@ -41,6 +41,11 @@ class ProjectRow(Base):
     __tablename__ = "projects"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     tenant_id: Mapped[str] = mapped_column(String(36), index=True)
+    # Cognito `sub` of the user who created the project. Projects are
+    # user-scoped: only the owner sees them in their list. Legacy rows
+    # created before this column existed are NULL and are visible to
+    # everyone in the tenant for backward compatibility.
+    owner_user_id: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(200))
     template_id: Mapped[str] = mapped_column(String(36), ForeignKey("template_profiles.id"))
     status: Mapped[str] = mapped_column(String(50), default="draft")
@@ -193,6 +198,9 @@ def _add_missing_columns(engine) -> None:
     statements = [
         "ALTER TABLE template_profiles "
         "ADD COLUMN IF NOT EXISTS template_slide_count INTEGER DEFAULT 0",
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS owner_user_id VARCHAR(200)",
+        "CREATE INDEX IF NOT EXISTS ix_projects_owner_user_id "
+        "ON projects (owner_user_id)",
     ]
     with engine.begin() as conn:
         for stmt in statements:
