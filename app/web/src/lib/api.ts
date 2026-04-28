@@ -88,6 +88,45 @@ export const FIGURE_TYPES = [
 ] as const;
 export type FigureType = (typeof FIGURE_TYPES)[number];
 
+/**
+ * Display labels for figure types (UI-only). The wire format stays the
+ * machine-readable snake_case identifier; users see Japanese.
+ * Falls back to the raw id if a future backend type isn't in this map.
+ */
+export const FIGURE_TYPE_LABELS: Record<FigureType, string> = {
+  table: 'テーブル',
+  cards_grid: 'カードグリッド',
+  two_column: '2カラム',
+  timeline: 'タイムライン',
+  stat_callout: '統計コールアウト',
+  bullet_list: '箇条書き',
+  comparison: '比較',
+  matrix_2x2: '2×2マトリクス',
+  swot: 'SWOT分析',
+  pyramid: 'ピラミッド',
+  org_chart: '組織図',
+  kpi_dashboard: 'KPIダッシュボード',
+  pull_quote: '引用',
+  icon_list: 'アイコンリスト',
+  process_flow: 'プロセスフロー',
+  gantt: 'ガントチャート',
+  stack_bar: '積み上げ棒グラフ',
+  waterfall: 'ウォーターフォール',
+  cost_breakdown: 'コスト内訳',
+  image_slot: '画像スロット',
+  flowchart: 'フローチャート',
+  spider_map: 'スパイダーマップ',
+  system_map: 'システムマップ',
+  value_flow: 'バリューフロー',
+  value_chain: 'バリューチェーン',
+  business_canvas: 'ビジネスキャンバス',
+  scheme_diagram: 'スキーム図',
+};
+
+export function figureTypeLabel(ft: string): string {
+  return FIGURE_TYPE_LABELS[ft as FigureType] ?? ft;
+}
+
 export interface SlideTemplateMapping {
   index: number;
   template_slide_index?: number;
