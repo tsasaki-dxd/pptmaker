@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { api, type TemplateProfile } from '@/lib/api';
+import { isAdmin } from '@/lib/auth';
 import { LoadingOverlay } from '@/components/LoadingOverlay';
 
 export default function TemplatesPage() {
@@ -11,6 +12,9 @@ export default function TemplatesPage() {
   const [status, setStatus] = useState<string>('');
   const [uploading, setUploading] = useState(false);
   const [list, setList] = useState<TemplateProfile[] | null>(null);
+  // isAdmin() reads localStorage, which is only available after hydration.
+  // Default to false on the server / first render, then flip on mount.
+  const [admin, setAdmin] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const refresh = useCallback(async () => {
@@ -24,6 +28,7 @@ export default function TemplatesPage() {
 
   useEffect(() => {
     void refresh();
+    setAdmin(isAdmin());
   }, [refresh]);
 
   async function handleCreate() {
@@ -116,12 +121,14 @@ export default function TemplatesPage() {
                   <div className="font-mono text-xs text-muted">{t.id}</div>
                   <div className="text-xs text-muted">{new Date(t.created_at).toLocaleString('ja-JP')}</div>
                 </div>
-                <button
-                  onClick={() => handleDelete(t)}
-                  className="shrink-0 rounded border border-purple-lt px-3 py-1 text-xs text-dark hover:bg-purple-lt/20"
-                >
-                  削除
-                </button>
+                {admin && (
+                  <button
+                    onClick={() => handleDelete(t)}
+                    className="shrink-0 rounded border border-purple-lt px-3 py-1 text-xs text-dark hover:bg-purple-lt/20"
+                  >
+                    削除
+                  </button>
+                )}
               </li>
             ))}
           </ul>

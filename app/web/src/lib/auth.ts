@@ -44,3 +44,32 @@ export async function signOut(): Promise<void> {
 export function isSignedIn(): boolean {
   return typeof window !== 'undefined' && !!window.localStorage.getItem('slideforge.accessToken');
 }
+
+/**
+ * Read `cognito:groups` from the cached access token. Used purely for UI
+ * gating (e.g. hiding the template delete button) — the backend still
+ * enforces admin-only operations on its side.
+ *
+ * No signature verification: the token came from our own login flow and
+ * the client can't grant itself privileges since the API re-validates
+ * the JWT against the Cognito JWKS.
+ */
+function decodeGroups(): string[] {
+  if (typeof window === 'undefined') return [];
+  const token = window.localStorage.getItem('slideforge.accessToken');
+  if (!token) return [];
+  const parts = token.split('.');
+  if (parts.length !== 3) return [];
+  try {
+    const payload = JSON.parse(
+      atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')),
+    ) as { 'cognito:groups'?: string[] };
+    return payload['cognito:groups'] ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export function isAdmin(): boolean {
+  return decodeGroups().includes('admin');
+}
