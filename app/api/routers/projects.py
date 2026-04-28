@@ -325,14 +325,20 @@ def patch_blueprint_slide_mapping(
     if not row:
         raise HTTPException(404, "no blueprint yet")
 
-    by_index = {m.index: m.template_slide_index for m in body.mappings}
+    by_index = {m.index: m for m in body.mappings}
     # row.slides is a JSON column — mutate a copy and reassign so
     # SQLAlchemy notices the change.
     new_slides = []
     for s in row.slides:
         s = dict(s)
-        if s.get("index") in by_index:
-            s["template_slide_index"] = by_index[s["index"]]
+        m = by_index.get(s.get("index"))
+        if m is not None:
+            if m.template_slide_index is not None:
+                s["template_slide_index"] = m.template_slide_index
+            if m.figure_type is not None:
+                s["figure_type"] = m.figure_type
+            elif m.clear_figure_type:
+                s["figure_type"] = None
         new_slides.append(s)
     row.slides = new_slides
     db.commit()

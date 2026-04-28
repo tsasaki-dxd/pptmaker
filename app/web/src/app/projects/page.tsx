@@ -1,10 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useState } from 'react';
 
 import {
   api,
+  FIGURE_TYPES,
   type Blueprint,
+  type FigureType,
   type Project,
   type SlideSpec,
   type SlideTemplateMapping,
@@ -16,6 +19,19 @@ import { LoadingOverlay } from '@/components/LoadingOverlay';
 type Step = 'input' | 'reviewing' | 'rendering' | 'done';
 
 export default function ProjectsPage() {
+  // useSearchParams must be inside a Suspense boundary for static
+  // export. The hook never suspends in practice (we read it synchronously)
+  // but Next.js requires the boundary to silence the build-time error.
+  return (
+    <Suspense fallback={<section className="text-sm text-muted">読み込み中...</section>}>
+      <ProjectsPageInner />
+    </Suspense>
+  );
+}
+
+function ProjectsPageInner() {
+  const searchParams = useSearchParams();
+  const editId = searchParams?.get('id') ?? null;
   const [templates, setTemplates] = useState<TemplateProfile[]>([]);
 
   // Step 1 form
@@ -59,6 +75,44 @@ export default function ProjectsPage() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // ────────────────────────────────────────────────────────────────────
+  // Edit existing project: when /projects/?id=xxx is loaded, fetch the
+  // project + its latest blueprint + template and jump to Step 2 so the
+  // user can revise / re-render without re-running blueprint generation.
+  // ────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!editId) return;
+    let cancelled = false;
+    setBusy(true);
+    push(`プロジェクト ${editId} を読み込み...`);
+    (async () => {
+      try {
+        const p = await api.getProject(editId);
+        if (cancelled) return;
+        setProject(p);
+        setName(p.name);
+        setTemplateId(p.template_id);
+        const t = await api.getTemplate(p.template_id);
+        if (cancelled) return;
+        setSelectedTemplate(t);
+        const bp = await api.getBlueprint(p.id);
+        if (cancelled) return;
+        setBlueprint(bp);
+        setStep('reviewing');
+        push(`読み込み完了: blueprint v${bp.version} / ${bp.slides.length} slides`);
+      } catch (e) {
+        if (cancelled) return;
+        push(`読み込み失敗: ${String(e)}`);
+        // Stay on Step 1 so the user isn't trapped on a broken edit flow.
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [editId]);
 
   // ────────────────────────────────────────────────────────────────────
   // Step 1 → 2: create project + generate blueprint
@@ -133,6 +187,24 @@ export default function ProjectsPage() {
       setBlueprint(updated);
     } catch (e) {
       push(`マッピング更新失敗: ${String(e)}`);
+    }
+  }
+
+  async function handleSlideFigureTypeChange(
+    slideIndex: number,
+    next: FigureType | null,
+  ) {
+    if (!project || !blueprint) return;
+    const mappings: SlideTemplateMapping[] = [
+      next === null
+        ? { index: slideIndex, clear_figure_type: true }
+        : { index: slideIndex, figure_type: next },
+    ];
+    try {
+      const updated = await api.patchBlueprintMapping(project.id, mappings);
+      setBlueprint(updated);
+    } catch (e) {
+      push(`figure_type 更新失敗: ${String(e)}`);
     }
   }
 
@@ -288,6 +360,10 @@ export default function ProjectsPage() {
     setName('');
     setIntent('');
     setStepPreviews([]);
+    // Drop any ?id=… so the load-existing effect doesn't fire again.
+    if (typeof window !== 'undefined' && editId) {
+      window.history.replaceState({}, '', '/projects/');
+    }
   }
 
   async function handleExport(projectId: string, format: 'pptx' | 'pdf') {
@@ -332,6 +408,7 @@ export default function ProjectsPage() {
           blueprint={blueprint}
           template={selectedTemplate}
           onMappingChange={handleSlideMappingChange}
+          onFigureTypeChange={handleSlideFigureTypeChange}
           revisionText={revisionText}
           setRevisionText={setRevisionText}
           onRevise={() => handleRevise()}
@@ -451,6 +528,7 @@ function Step2Review(props: {
   blueprint: Blueprint;
   template: TemplateProfile | null;
   onMappingChange: (slideIndex: number, value: number) => void;
+  onFigureTypeChange: (slideIndex: number, next: FigureType | null) => void;
   revisionText: string;
   setRevisionText: (s: string) => void;
   onRevise: () => void;
@@ -463,6 +541,7 @@ function Step2Review(props: {
     blueprint,
     template,
     onMappingChange,
+    onFigureTypeChange,
     revisionText,
     setRevisionText,
     onRevise,
@@ -493,6 +572,7 @@ function Step2Review(props: {
             templatePages={templatePages}
             layoutByIndex={layoutByIndex}
             onMappingChange={onMappingChange}
+            onFigureTypeChange={onFigureTypeChange}
             onReviseSlide={onReviseSlide}
             disabled={busy}
           />
@@ -544,25 +624,58 @@ function SlideCard(props: {
   templatePages: number;
   layoutByIndex: Map<number, string>;
   onMappingChange: (slideIndex: number, value: number) => void;
+  onFigureTypeChange: (slideIndex: number, next: FigureType | null) => void;
   onReviseSlide: (slideIndex: number, instruction: string) => void;
   disabled: boolean;
 }) {
-  const { slide, templatePages, layoutByIndex, onMappingChange, onReviseSlide, disabled } = props;
+  const {
+    slide,
+    templatePages,
+    layoutByIndex,
+    onMappingChange,
+    onFigureTypeChange,
+    onReviseSlide,
+    disabled,
+  } = props;
   const [localRevision, setLocalRevision] = useState('');
   const [expanded, setExpanded] = useState(false);
   const current =
     slide.template_slide_index ??
     (templatePages > 0 ? ((slide.index - 1) % templatePages) + 1 : 1);
+  const isContent = slide.layout === 'content';
 
   return (
     <div className="rounded border border-purple-lt/60 p-3 text-xs">
       <div className="flex flex-wrap items-baseline gap-2">
         <span className="font-mono text-sm font-bold">#{slide.index}</span>
         <span className="rounded bg-purple-lt/40 px-2 py-0.5 text-xs">{slide.layout}</span>
-        {slide.figure_type && (
-          <span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-800">
-            {slide.figure_type}
-          </span>
+        {isContent ? (
+          <label className="flex items-center gap-1 text-xs">
+            <span className="text-muted">図種</span>
+            <select
+              value={slide.figure_type ?? ''}
+              onChange={(e) => {
+                const v = e.target.value;
+                onFigureTypeChange(slide.index, v === '' ? null : (v as FigureType));
+              }}
+              disabled={disabled}
+              className="rounded border border-purple-lt px-1 py-0.5 text-xs"
+              aria-label={`スライド ${slide.index} の figure_type`}
+            >
+              <option value="">— 自動 —</option>
+              {FIGURE_TYPES.map((ft) => (
+                <option key={ft} value={ft}>
+                  {ft}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          slide.figure_type && (
+            <span className="rounded bg-amber-50 px-2 py-0.5 text-xs text-amber-800">
+              {slide.figure_type}
+            </span>
+          )
         )}
         <span className="ml-auto flex items-center gap-1">
           <span className="text-muted">テンプレ</span>

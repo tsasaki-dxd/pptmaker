@@ -133,10 +133,19 @@ class BlueprintJob(BaseModel):
 
 
 class SlideTemplateMapping(BaseModel):
-    """One row in a PATCH /blueprint payload: slide N uses template page T."""
+    """One row in a PATCH /blueprint payload. ``template_slide_index``
+    swaps which template page renders the slide; ``figure_type`` swaps
+    the figure_renderer applied to its body. Both are optional — only
+    the fields present in the payload are mutated."""
 
     index: int = Field(ge=1)
-    template_slide_index: int = Field(ge=1)
+    template_slide_index: int | None = Field(default=None, ge=1)
+    figure_type: FigureType | None = None
+    # Explicit "clear figure_type" flag — distinguishes "user didn't
+    # touch this field" (figure_type omitted entirely) from "user
+    # cleared it back to None". Without this we can't tell the two
+    # apart with FigureType already being optional.
+    clear_figure_type: bool = False
 
 
 class SlideMappingPatch(BaseModel):

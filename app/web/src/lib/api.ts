@@ -52,9 +52,41 @@ export interface SlideSpec {
   template_slide_index?: number | null;
 }
 
+/**
+ * Figure types known to the backend's FigureType Literal. Kept in
+ * sync with app/api/models/schemas.py — when a new figure_type is
+ * added there, mirror it here.
+ */
+export const FIGURE_TYPES = [
+  'table',
+  'cards_grid',
+  'two_column',
+  'timeline',
+  'stat_callout',
+  'bullet_list',
+  'comparison',
+  'matrix_2x2',
+  'swot',
+  'pyramid',
+  'org_chart',
+  'kpi_dashboard',
+  'pull_quote',
+  'icon_list',
+  'process_flow',
+  'gantt',
+  'stack_bar',
+  'waterfall',
+  'cost_breakdown',
+  'image_slot',
+] as const;
+export type FigureType = (typeof FIGURE_TYPES)[number];
+
 export interface SlideTemplateMapping {
   index: number;
-  template_slide_index: number;
+  template_slide_index?: number;
+  figure_type?: FigureType;
+  /** Set true (with figure_type omitted) to clear the slide's figure_type. */
+  clear_figure_type?: boolean;
 }
 
 export interface Blueprint {
