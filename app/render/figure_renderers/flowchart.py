@@ -29,6 +29,17 @@ _MAX_LAYERS = 7
 _MAX_NODES_PER_LAYER = 4
 _NODE_KINDS = {"start", "end", "process", "decision", "data"}
 
+# Comfortable baseline node sizes — fit a 5-8 JP-char label plus a
+# 1-2 line note at default font sizes without auto_fit having to
+# kick in. Render uses min(baseline, available) so sparse charts
+# don't oversize and crowded charts shrink gracefully.
+_IDEAL_NODE_W = 1_550_000
+_IDEAL_NODE_H = 720_000
+# Floor so even a 7-layer by 4-parallel flow stays legible after
+# auto_fit pulls text size down.
+_MIN_NODE_W = 600_000
+_MIN_NODE_H = 280_000
+
 
 def _diamond(
     sp_id: int,
@@ -279,26 +290,27 @@ class FlowchartRenderer(FigureRenderer):
 
         for li, layer in enumerate(layers):
             n = len(layer)
+            # Take min(baseline, available) so each node fits its slot
+            # but never exceeds the ideal size — and floor it so the
+            # text auto_fit has something readable to work with even
+            # at maximum density (7 layers by 4 nodes).
             if horizontal:
-                # Within a horizontal layer, nodes stack vertically.
                 slot_cross = plot_h // n
-                node_h_pct = 0.78 if any_note else 0.65
-                node_h = max(
-                    _i(slot_cross * node_h_pct),
-                    420000 if any_note else 320000,
-                )
-                # Width: leave a healthy gap so arrows can land cleanly.
-                node_w = max(_i(layer_advance * 0.80), 700000)
+                # Available room inside the slot. Use 88% so the
+                # arrows have visible spacing even at low density.
+                avail_w = max(_i(layer_advance * 0.88), _MIN_NODE_W)
+                avail_h = max(_i(slot_cross * 0.88), _MIN_NODE_H)
+                node_w = min(_IDEAL_NODE_W, avail_w)
+                ideal_h = _IDEAL_NODE_H if any_note else int(_IDEAL_NODE_H * 0.7)
+                node_h = min(ideal_h, avail_h)
                 slot_v_pad = (slot_cross - node_h) // 2
             else:
-                # Vertical: nodes within a layer stretch horizontally.
                 slot_cross = plot_w // n
-                node_h_pct = 0.72 if any_note else 0.50
-                node_h = max(
-                    _i(layer_advance * node_h_pct),
-                    360000 if any_note else 280000,
-                )
-                node_w = max(_i(slot_cross * 0.88), 700000)
+                avail_w = max(_i(slot_cross * 0.88), _MIN_NODE_W)
+                avail_h = max(_i(layer_advance * 0.88), _MIN_NODE_H)
+                node_w = min(_IDEAL_NODE_W, avail_w)
+                ideal_h = _IDEAL_NODE_H if any_note else int(_IDEAL_NODE_H * 0.7)
+                node_h = min(ideal_h, avail_h)
                 slot_v_pad = (layer_advance - node_h) // 2
 
             for ni, node in enumerate(layer):

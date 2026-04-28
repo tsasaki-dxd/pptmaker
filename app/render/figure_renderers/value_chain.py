@@ -446,12 +446,17 @@ class ValueChainRenderer(FigureRenderer):
             sid += 1
 
         # ---- content cards (one per primary + optional margin) ----
-        # Each card sits directly below its chevron and carries the
-        # bullet items. The margin card uses an amber accent so it
-        # reads as the same column as the margin chevron above it.
+        # Each card aligns with its chevron's *main body* — the
+        # rectangular zone between the chevron's left concave indent
+        # and right convex tip. That zone runs from
+        # `i*step + indent_emu` to `(i+1)*step` (width: step - indent).
+        # Aligning to the bbox/step gave a card that was wider than
+        # the chevron's visible body and looked off-axis on the right.
         if has_content:
             cards_y = primary_y + chev_h + content_gap
-            card_inset = max(step // 24, 30000)
+            # Tiny gap between adjacent cards so they don't appear
+            # fused into one long row. Half a gap on each side.
+            inter_gap = max(_i(0.025 * 914400), 24000)
 
             def _render_card(
                 idx_label: str,
@@ -462,8 +467,11 @@ class ValueChainRenderer(FigureRenderer):
                 start_id: int,
             ) -> int:
                 cur = start_id
-                col_left = col_x + card_inset
-                col_w = step - 2 * card_inset
+                # col_x is the chevron bbox's left edge for this column.
+                # Card body spans the chevron's main rectangle minus a
+                # small inter-column gap.
+                col_left = col_x + indent_emu + inter_gap // 2
+                col_w = step - indent_emu - inter_gap
                 shapes.append(
                     round_rect_shape(
                         cur,

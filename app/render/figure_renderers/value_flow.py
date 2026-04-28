@@ -24,6 +24,18 @@ from .registry import register
 _MIN_ACTORS = 2
 _MAX_ACTORS = 6
 _FLOW_KINDS = ("money", "goods", "info", "contract")
+_CONNECTOR_STYLES = ("straight", "curved", "bent")
+_PRST_BY_STYLE = {
+    "straight": "line",
+    # bentConnector3 = single right-angle bend between two endpoints
+    # (orthogonal L-shape). Direction is inferred from the bbox
+    # aspect, plus our existing flipH / flipV.
+    "bent": "bentConnector3",
+    # curvedConnector3 = smooth single-inflection curve. Reads better
+    # than a straight line when actors sit on a polygon and direct
+    # lines would cross each other.
+    "curved": "curvedConnector3",
+}
 
 
 def _arrow(
@@ -37,11 +49,13 @@ def _arrow(
     *,
     width_emu: int = 9525,
     head_size: str = "med",
+    style: str = "straight",
 ) -> str:
     bx, by = min(x1, x2), min(y1, y2)
     bw, bh = max(abs(x2 - x1), 1), max(abs(y2 - y1), 1)
     flip_h = "1" if x2 < x1 else "0"
     flip_v = "1" if y2 < y1 else "0"
+    prst = _PRST_BY_STYLE.get(style, "line")
     return (
         f'<p:cxnSp><p:nvCxnSpPr>'
         f'<p:cNvPr id="{sp_id}" name="{_xml_escape(name)}"/>'
@@ -50,7 +64,7 @@ def _arrow(
         f'<a:xfrm flipH="{flip_h}" flipV="{flip_v}">'
         f'<a:off x="{bx}" y="{by}"/><a:ext cx="{bw}" cy="{bh}"/>'
         f"</a:xfrm>"
-        f'<a:prstGeom prst="line"><a:avLst/></a:prstGeom>'
+        f'<a:prstGeom prst="{prst}"><a:avLst/></a:prstGeom>'
         f'<a:ln w="{width_emu}">'
         f'<a:solidFill><a:srgbClr val="{color}"/></a:solidFill>'
         f'<a:tailEnd type="triangle" w="{head_size}" len="{head_size}"/>'
@@ -93,8 +107,13 @@ class ValueFlowRenderer(FigureRenderer):
         "1-2 line `note` (business-model fact / scale / regulation) "
         "rendered below the role; cards grow taller automatically when "
         "any actor has a note so the layout stays uniform. "
+        "`connector_style` defaults to 'curved' (smooth single-inflection "
+        "curves which read better than straight lines on a polygon "
+        "layout); use 'bent' for orthogonal L-shape connectors or "
+        "'straight' to revert to direct lines. "
         "content: {actors: [{id, label, role?, primary?, note?}], "
-        "flows: [{from, to, label?, kind?}]}"
+        "flows: [{from, to, label?, kind?}], "
+        "connector_style?: 'straight'|'curved'|'bent'}"
     )
     input_schema_example: ClassVar[dict[str, Any]] = {
         "actors": [
@@ -167,6 +186,12 @@ class ValueFlowRenderer(FigureRenderer):
                     errors.append(
                         f"flows[{fi}].kind must be one of {list(_FLOW_KINDS)}"
                     )
+
+        cs = content.get("connector_style")
+        if cs is not None and cs not in _CONNECTOR_STYLES:
+            errors.append(
+                f"connector_style must be one of {list(_CONNECTOR_STYLES)}"
+            )
         return ValidationResult(ok=not errors, errors=tuple(errors))
 
     def render(
@@ -179,6 +204,9 @@ class ValueFlowRenderer(FigureRenderer):
         actors: list[dict[str, Any]] = list(content["actors"])
         flows: list[dict[str, Any]] = list(content.get("flows") or [])
         n = len(actors)
+        connector_style = str(content.get("connector_style") or "curved").lower()
+        if connector_style not in _CONNECTOR_STYLES:
+            connector_style = "curved"
 
         canvas_min = min(container.w, container.h)
         cx = container.x + container.w // 2
@@ -285,6 +313,7 @@ class ValueFlowRenderer(FigureRenderer):
                     color,
                     width_emu=12700,
                     head_size="med",
+                    style=connector_style,
                 )
             )
             sid += 1
