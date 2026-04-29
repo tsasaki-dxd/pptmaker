@@ -23,12 +23,31 @@ from ..shapes import (
     TextParagraph,
     TextRun,
     _i,
+    icon_pic,
     round_rect_shape,
     text_box,
     text_box_paragraphs,
 )
+from ..typography import TYPE_SCALE as T
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
+
+# Per-section icon — chosen to mirror the canonical BMC mental model:
+# partners = handshake, activities = settings, resources = layers,
+# value_propositions = gift, customer_relationships = users,
+# channels = truck, customer_segments = target,
+# cost = receipt (outflow), revenue = dollar-sign (inflow).
+_SECTION_ICONS: dict[str, str] = {
+    "key_partners": "handshake",
+    "key_activities": "settings",
+    "key_resources": "layers",
+    "value_propositions": "gift",
+    "customer_relationships": "users",
+    "channels": "truck",
+    "customer_segments": "target",
+    "cost_structure": "receipt",
+    "revenue_streams": "dollar-sign",
+}
 
 # Section keys are the BMC canonical names (snake_case). Titles are
 # JP-only because the half-column cells are too narrow for the full
@@ -150,6 +169,8 @@ class BusinessCanvasRenderer(FigureRenderer):
                     h=h,
                     palette=p,
                     font=ctx.font,
+                    media=ctx.media,
+                    slide_index=ctx.slide_index or 0,
                 )
             )
             sid += 4 + min(len(content[key]), _MAX_ITEMS_PER_SECTION)
@@ -170,6 +191,8 @@ class BusinessCanvasRenderer(FigureRenderer):
                 h=bot_h - gap,
                 palette=p,
                 font=ctx.font,
+                media=ctx.media,
+                slide_index=ctx.slide_index or 0,
             )
         )
         sid += 4 + min(len(content["cost_structure"]), _MAX_ITEMS_PER_SECTION)
@@ -184,6 +207,8 @@ class BusinessCanvasRenderer(FigureRenderer):
                 h=bot_h - gap,
                 palette=p,
                 font=ctx.font,
+                media=ctx.media,
+                slide_index=ctx.slide_index or 0,
             )
         )
 
@@ -204,6 +229,8 @@ class BusinessCanvasRenderer(FigureRenderer):
         h: int,
         palette: Any,
         font: str,
+        media: Any | None = None,
+        slide_index: int = 0,
     ) -> list[str]:
         # Per-section accent color so each box reads distinctly without
         # having to label it twice. Cost / revenue get amber + green to
@@ -250,16 +277,42 @@ class BusinessCanvasRenderer(FigureRenderer):
         # titles fit on one line at this width, so a single-line band
         # (~22% of the card height) is plenty.
         title_band_h = max(_i(h * 0.22), 220000)
+        title_y = y + strip_h + 20000
+
+        # Optional small icon left of the title to reinforce semantics.
+        icon_size = max(_i(title_band_h * 0.85), 160000)
+        title_left = x + 40000
+        icon_name = _SECTION_ICONS.get(key)
+        if media is not None and icon_name:
+            try:
+                out.append(
+                    icon_pic(
+                        sid,
+                        icon_name,
+                        media,
+                        slide_index,
+                        title_left,
+                        title_y + (title_band_h - icon_size) // 2,
+                        icon_size,
+                        icon_size,
+                        color=accent,
+                    )
+                )
+                sid += 1
+                title_left = title_left + icon_size + 60000
+            except (ValueError, RuntimeError):
+                pass
+
         out.append(
             text_box(
                 sid,
                 f"bmc-title-{key}",
-                x + 40000,
-                y + strip_h + 20000,
-                w - 80000,
+                title_left,
+                title_y,
+                w - (title_left - x) - 40000,
                 title_band_h,
                 title,
-                size_pt=10,
+                size_pt=T["label"],
                 bold=True,
                 color=palette.dark,
                 font=font,
@@ -275,7 +328,7 @@ class BusinessCanvasRenderer(FigureRenderer):
                     runs=(
                         TextRun(
                             text="・ " + str(it),
-                            size_pt=8,
+                            size_pt=T["caption"],
                             color=palette.black,
                         ),
                     ),

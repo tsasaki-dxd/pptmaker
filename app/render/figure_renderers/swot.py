@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..shapes import fit_stack, pill_label, rect_outline, rect_shape, text_box
+from ..shapes import fit_stack, icon_pic, pill_label, rect_outline, rect_shape, text_box
+from ..typography import TYPE_SCALE as T
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
@@ -14,6 +15,15 @@ _TITLES: dict[str, str] = {
     "weaknesses": "弱み",
     "opportunities": "機会",
     "threats": "脅威",
+}
+# Semantic icon per quadrant — the canonical SWOT visual mnemonic:
+# strengths = energy/zap, weaknesses = warning, opportunities = ideas,
+# threats = defense/shield.
+_QUADRANT_ICONS: dict[str, str] = {
+    "strengths": "zap",
+    "weaknesses": "alert-triangle",
+    "opportunities": "lightbulb",
+    "threats": "shield",
 }
 _MAX_ITEMS = 6
 
@@ -72,18 +82,44 @@ class SwotRenderer(FigureRenderer):
             shapes.append(rect_outline(sid, f"swot-out-{key}", x, y, cell_w, cell_h, p.border))
             sid += 1
 
-            pill_w = min(cell_w - 320000, 520000)
+            # Header row: icon + title pill, side-by-side at quadrant top.
+            icon_size = 280000
+            header_y = y + 140000
+            header_left = x + 160000
+            pill_left = header_left
+            if ctx.media is not None:
+                try:
+                    shapes.append(
+                        icon_pic(
+                            sid,
+                            _QUADRANT_ICONS[key],
+                            ctx.media,
+                            ctx.slide_index or 0,
+                            header_left,
+                            header_y - 10000,
+                            icon_size,
+                            icon_size,
+                            color=accent,
+                        )
+                    )
+                    sid += 1
+                    pill_left = header_left + icon_size + 80000
+                except (ValueError, RuntimeError):
+                    pass
+
+            pill_w = min(cell_w - (pill_left - x) - 160000, 520000)
             pill_h = 260000
             shapes.append(
                 pill_label(
                     sid,
                     f"swot-pill-{key}",
-                    x + 160000,
-                    y + 140000,
+                    pill_left,
+                    header_y,
                     pill_w,
                     pill_h,
                     _TITLES[key],
                     accent,
+                    size_pt=T["body"],
                     font=ctx.font,
                 )
             )
@@ -91,7 +127,7 @@ class SwotRenderer(FigureRenderer):
 
             if not items:
                 continue
-            list_y = y + 140000 + pill_h + 120000
+            list_y = header_y + pill_h + 120000
             list_h = cell_h - (list_y - y) - 120000
             item_h, item_gap = fit_stack(
                 container_h=list_h,
@@ -111,7 +147,7 @@ class SwotRenderer(FigureRenderer):
                         cell_w - 320000,
                         item_h,
                         f"・ {item}",
-                        size_pt=10,
+                        size_pt=T["body"],
                         color=p.black,
                         font=ctx.font,
                         auto_fit=True,

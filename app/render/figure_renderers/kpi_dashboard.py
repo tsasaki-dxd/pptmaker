@@ -4,12 +4,26 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..shapes import rect_outline, rect_shape, text_box
+from ..icon_renderer import is_known as _icon_known
+from ..shapes import icon_pic, rect_outline, rect_shape, text_box
+from ..typography import TYPE_SCALE as T
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
 _MIN_METRICS = 3
 _MAX_METRICS = 6
+
+# Default icons cycled through KPI cards when the blueprint doesn't
+# specify an `icon` field per metric. Picked for general business
+# context — gauges, growth, targets — and intentionally non-redundant.
+_DEFAULT_ICON_CYCLE: tuple[str, ...] = (
+    "trending-up",
+    "target",
+    "gauge",
+    "activity",
+    "award",
+    "zap",
+)
 
 
 @register
@@ -75,16 +89,52 @@ class KpiDashboardRenderer(FigureRenderer):
                 rect_outline(sid, f"kpi-out-{idx}", x, y, card_w, card_h, p.border)
             )
             sid += 1
+
+            # Top-left icon. Use the metric's `icon` field if it names a
+            # known Lucide icon, otherwise cycle through default business
+            # icons. Skipped silently when no MediaRegistry was threaded
+            # through (test environments) — the rest of the card still
+            # renders cleanly.
+            icon_size = 320000
+            icon_pad = 160000
+            icon_name = (
+                m.get("icon")
+                if isinstance(m.get("icon"), str) and _icon_known(m["icon"])
+                else _DEFAULT_ICON_CYCLE[idx % len(_DEFAULT_ICON_CYCLE)]
+            )
+            label_x = x + icon_pad
+            if ctx.media is not None:
+                try:
+                    shapes.append(
+                        icon_pic(
+                            sid,
+                            icon_name,
+                            ctx.media,
+                            ctx.slide_index or 0,
+                            x + icon_pad,
+                            y + icon_pad,
+                            icon_size,
+                            icon_size,
+                            color=p.purple_dk,
+                        )
+                    )
+                    sid += 1
+                    label_x = x + icon_pad + icon_size + 100000
+                except (ValueError, RuntimeError):
+                    # Bad icon name or cairosvg unavailable: fall through
+                    # to the icon-less layout.
+                    pass
+
             shapes.append(
                 text_box(
                     sid,
                     f"kpi-label-{idx}",
-                    x + 160000,
+                    label_x,
                     y + 140000,
-                    card_w - 320000,
-                    320000,
+                    card_w - (label_x - x) - 160000,
+                    icon_size,
                     m["label"],
-                    size_pt=10,
+                    size_pt=T["label"],
                     bold=True,
                     color=p.purple_dk,
                     font=ctx.font,
@@ -100,7 +150,7 @@ class KpiDashboardRenderer(FigureRenderer):
                     card_w - 320000,
                     600000,
                     m["value"],
-                    size_pt=28,
+                    size_pt=T["h1"],
                     bold=True,
                     color=p.purple_dk,
                     align="ctr",
@@ -120,7 +170,7 @@ class KpiDashboardRenderer(FigureRenderer):
                         card_w - 320000,
                         280000,
                         delta,
-                        size_pt=10,
+                        size_pt=T["caption"],
                         bold=True,
                         color=color,
                         align="ctr",
