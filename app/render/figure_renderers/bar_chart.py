@@ -156,6 +156,7 @@ class BarChartRenderer(FigureRenderer):
             value_color=p.black,
             font_size_pt=T["label"],
             font=ctx.font,
+            palette=p,
         )
         # bar_chart_shape allocates child shape IDs as sid*100+offset
         # (see shapes.py:_sub_id), so the safe next_shape_id is simply
