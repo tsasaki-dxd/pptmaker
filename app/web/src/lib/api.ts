@@ -77,6 +77,9 @@ export const FIGURE_TYPES = [
   'stack_bar',
   'waterfall',
   'cost_breakdown',
+  'bar_chart',
+  'line_chart',
+  'pie_chart',
   'image_slot',
   'flowchart',
   'spider_map',
@@ -126,10 +129,11 @@ export const FIGURE_TYPE_LABELS: Record<string, string> = {
   value_chain: 'バリューチェーン',
   business_canvas: 'ビジネスキャンバス',
   scheme_diagram: 'スキーム図',
-  // Samples-gallery-only entries (LayoutSpec primitives, not figure_type renderers).
   bar_chart: '棒グラフ',
   line_chart: '折れ線グラフ',
   pie_chart: '円グラフ',
+  // Samples-gallery-only — "composite" tags free-form LayoutSpec
+  // specimens that mix multiple primitives, not a real figure_type.
   composite: '複合レイアウト',
 };
 

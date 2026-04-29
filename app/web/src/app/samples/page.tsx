@@ -16,6 +16,17 @@ type Sample = {
 
 const ALL = '__all__';
 
+// "composite" is a meta-tag for free-form LayoutSpec specimens — not a
+// real figure_type — so it sorts to the end of the gallery instead of
+// landing alphabetically in the middle.
+function compareFigureTypes(a: string, b: string): number {
+  const aLast = a === 'composite';
+  const bLast = b === 'composite';
+  if (aLast && !bLast) return 1;
+  if (!aLast && bLast) return -1;
+  return a.localeCompare(b);
+}
+
 export default function SamplesPage() {
   const [samples, setSamples] = useState<Sample[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,13 +54,15 @@ export default function SamplesPage() {
 
   const figureTypes = useMemo(() => {
     if (!samples) return [] as string[];
-    return Array.from(new Set(samples.map((s) => s.figure_type))).sort();
+    return Array.from(new Set(samples.map((s) => s.figure_type))).sort(
+      compareFigureTypes,
+    );
   }, [samples]);
 
   const filtered = useMemo(() => {
     if (!samples) return [] as Sample[];
     const q = search.trim().toLowerCase();
-    return samples.filter((s) => {
+    const matched = samples.filter((s) => {
       if (figureType !== ALL && s.figure_type !== figureType) return false;
       if (!q) return true;
       return (
@@ -57,6 +70,13 @@ export default function SamplesPage() {
         s.title.toLowerCase().includes(q) ||
         s.notes.toLowerCase().includes(q)
       );
+    });
+    // Re-sort so composite specimens always sit at the end of the
+    // grid; the manifest's natural alphabetic order would put them
+    // partway through.
+    return [...matched].sort((a, b) => {
+      const byType = compareFigureTypes(a.figure_type, b.figure_type);
+      return byType !== 0 ? byType : a.id.localeCompare(b.id);
     });
   }, [samples, figureType, search]);
 
