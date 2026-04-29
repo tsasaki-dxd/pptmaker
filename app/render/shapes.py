@@ -911,14 +911,20 @@ def _segment_line(
     )
 
 
-_DEFAULT_SERIES_COLORS: Final[tuple[str, ...]] = (
-    DEFAULT_PALETTE.purple,
-    DEFAULT_PALETTE.amber,
-    DEFAULT_PALETTE.green,
-    DEFAULT_PALETTE.purple_lt,
-    DEFAULT_PALETTE.purple_dk,
-    DEFAULT_PALETTE.muted,
-)
+def _series_colors_from_palette(palette: Palette) -> tuple[str, ...]:
+    """Auto-cycle palette for multi-series charts. Drawn from the
+    active palette so that swapping templates re-themes every chart
+    without per-series color overrides; the previous module-level
+    `_DEFAULT_SERIES_COLORS` baked in DXDesignSystem's purple and
+    leaked into accounting-template renders."""
+    return (
+        palette.purple,
+        palette.amber,
+        palette.green,
+        palette.purple_lt,
+        palette.purple_dk,
+        palette.muted,
+    )
 
 
 def bar_chart_shape(
@@ -942,6 +948,7 @@ def bar_chart_shape(
     value_color: str = DEFAULT_PALETTE.black,
     font_size_pt: int = 10,
     font: str = DEFAULT_FONT,
+    palette: Palette | None = None,
 ) -> str:
     """Composite bar chart with single- or multi-series support.
 
@@ -955,7 +962,13 @@ def bar_chart_shape(
       * ``"stacked100"``: stacked but each category sums to 100%
 
     ``orientation``: ``"v"`` (bars grow up) or ``"h"`` (grow right).
+
+    ``palette`` drives the auto-cycle colors used when individual
+    series don't carry their own ``color``. Defaults to DEFAULT_PALETTE
+    so existing call sites stay valid; pass the active template's
+    palette to keep multi-series bars in-theme.
     """
+    series_colors = _series_colors_from_palette(palette or DEFAULT_PALETTE)
     # Normalize input to (categories, series) form.
     if items is not None and series is not None:
         # Caller error — emit nothing rather than mixing.
@@ -1035,7 +1048,7 @@ def bar_chart_shape(
     def _series_color(s_idx: int, col: str | None) -> str:
         if col:
             return col
-        return _DEFAULT_SERIES_COLORS[s_idx % len(_DEFAULT_SERIES_COLORS)]
+        return series_colors[s_idx % len(series_colors)]
 
     def _bar_color_for(cat_idx: int, ser_idx: int, col: str | None) -> str:
         # In single-series item mode, prefer per-item color override.
@@ -1260,6 +1273,7 @@ def line_chart_shape(
     marker_radius_emu: int = 38100,
     font_size_pt: int = 9,
     font: str = DEFAULT_FONT,
+    palette: Palette | None = None,
 ) -> str:
     """Composite line chart.
 
@@ -1307,8 +1321,9 @@ def line_chart_shape(
     def _y_for(v: float) -> int:
         return plot_bottom - _i(plot_h * ((v - vmin) / (vmax - vmin)))
 
+    line_series_colors = _series_colors_from_palette(palette or DEFAULT_PALETTE)
     for s_idx, (_s_name, vals, col) in enumerate(series):
-        color = col or DEFAULT_PALETTE.purple
+        color = col or line_series_colors[s_idx % len(line_series_colors)]
         # Pad short series with their last value so the line still
         # spans the full x range. (Caller can opt out by giving every
         # series the same length.)

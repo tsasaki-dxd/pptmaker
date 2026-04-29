@@ -102,5 +102,6 @@ class LineChartRenderer(FigureRenderer):
             label_color=p.dark,
             font_size_pt=T["caption"],
             font=ctx.font,
+            palette=p,
         )
         return RenderOutput(shapes_xml=[xml] if xml else [], next_shape_id=sid + 1)

@@ -628,6 +628,7 @@ def emit_shape(
             value_color=resolve_palette_color(shape.value_color, palette),
             font_size_pt=shape.font_size_pt,
             font=font,
+            palette=palette,
         )
 
     if isinstance(shape, LineChartShape):
@@ -654,6 +655,7 @@ def emit_shape(
             marker_radius_emu=shape.marker_radius_emu,
             font_size_pt=shape.font_size_pt,
             font=font,
+            palette=palette,
         )
 
     if isinstance(shape, PieChartShape):
