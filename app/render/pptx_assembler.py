@@ -281,7 +281,19 @@ def finalize_media(
     media_dir = unpacked_root / "ppt" / "media"
     media_dir.mkdir(parents=True, exist_ok=True)
 
-    for idx, asset_id in enumerate(asset_ids, start=1):
+    # Templates ship with their own media (logos, decorations) at
+    # ppt/media/image1.png, image2.png, … and the slide rels reference
+    # them by name. Start the new index AFTER the highest existing
+    # imageN so we never clobber template-shipped images — that bug
+    # caused the DXDesignSystem logo to render as our embedded icon.
+    base_idx = 0
+    for existing in media_dir.iterdir():
+        m = re.match(r"image(\d+)\.[A-Za-z0-9]+$", existing.name)
+        if m:
+            base_idx = max(base_idx, int(m.group(1)))
+
+    for offset, asset_id in enumerate(asset_ids, start=1):
+        idx = base_idx + offset
         desc = registry.entries[asset_id]  # type: ignore[attr-defined]
         mime = desc.mime
         ext = _MIME_TO_EXT.get(mime)
@@ -303,7 +315,7 @@ def finalize_media(
             (media_dir / f"image{idx}.{ext}").write_bytes(data)
 
         part_name = f"image{idx}.{ext}"
-        rid = f"rId{10000 + idx - 1}"
+        rid = f"rId{10000 + offset - 1}"
         asset_to_part[asset_id] = (part_name, ext, rid)
         used_exts[ext] = mime
 
