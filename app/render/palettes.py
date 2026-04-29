@@ -1,35 +1,45 @@
-"""Named palette registry — sample-gallery and template-binding hub.
+"""Named palette + template registry for the sample gallery.
 
-Each named palette is a `Palette` instance with the same field names
-(`purple`, `purple_lt`, `purple_dk`, …); the labels stay because the
-field names are referenced from layout_designer prompts and
-`resolve_palette_color` token map. The underlying hexes change per
-brand. Field 'purple' is a stable token that means "primary brand
-color" — even when the brand is navy.
+Each named entry binds a `Palette` (body colors) to a `.pptx`
+template path (slide chrome). The same field names (`purple`,
+`purple_lt`, `purple_dk`, …) stay across templates because the field
+names are referenced from layout_designer prompts and
+`resolve_palette_color` token maps. The underlying hexes change per
+brand — field 'purple' is the stable token for "primary brand
+color", even when the brand is teal-blue.
 
 Used by:
   * scripts/generate_samples.py — iterates every entry to emit a
     per-template sample set so the /samples gallery can demonstrate
-    template-specific theming.
+    template-specific theming end-to-end (chrome + body).
   * Future production path can map a TemplateRow.brand_id to one of
-    these names when the template's own theme1.xml doesn't carry
-    full palette information.
+    these names.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from .shapes import Palette
+
+_DOCS_DIR = Path(__file__).resolve().parents[2] / "docs"
 
 
 @dataclass(frozen=True)
 class NamedPalette:
-    """A palette with display metadata for the gallery selector."""
+    """A palette + its slide-chrome template, with display metadata
+    for the gallery selector."""
 
     id: str
     label: str
     palette: Palette
+    template_path: Path
+    # The 1-based slide index inside ``template_path`` that the
+    # samples generator should clone as the body-content layout.
+    # DXDesignSystem ships with the content page at slide 4; sister
+    # templates may differ, so each entry declares its own.
+    content_slide_index: int = 4
 
 
 # DX デザインシステム株式会社 — current production default. Purple
@@ -38,34 +48,38 @@ DXDESIGN_PALETTE = NamedPalette(
     id="dxdesign",
     label="DXデザインシステム",
     palette=Palette(),  # field defaults already match
+    template_path=_DOCS_DIR / "DXDesignSystem_Template.pptx",
 )
 
 
-# DX 会計事務所 — professional / financial-services tone. Corporate
-# navy primary with sophisticated gold accent and deep teal secondary.
-# Conservative palette intended for accounting / advisory decks.
+# DX デザイン会計事務所 — professional / financial-services tone.
+# Body palette derived from the chrome accent that the template ships
+# with (#0080B0 — corporate cyan-blue) so figure shapes (KPI cards,
+# SWOT pills, charts) tonally match the slide chrome (eyebrow, accent
+# bar, page numbering). Amber + green stay generic for delta / status
+# indicators.
 DXACCOUNTING_PALETTE = NamedPalette(
     id="dxaccounting",
-    label="DX会計事務所",
+    label="DXデザイン会計事務所",
     palette=Palette(
-        purple="2E5C8A",       # corporate navy (primary)
-        purple_lt="8FAFD0",    # soft navy
-        purple_dk="1A3A5F",    # deep navy
-        purple_bg="EEF2F8",    # very light navy bg
-        black="2A2E3A",        # cooler near-black
-        dark="4A5060",         # slate dark
-        muted="8E97A8",        # cool muted gray
-        border="DCE2EB",       # light cool border
+        purple="0080B0",       # corporate cyan-blue (matches template chrome)
+        purple_lt="7FB8D8",    # soft cyan
+        purple_dk="00567A",    # deeper cyan-blue for emphasis
+        purple_bg="EAF3F8",    # very light cyan tint
+        black="2F3A42",        # cool near-black (matches chrome)
+        dark="4A5560",         # slate dark
+        muted="7A8894",        # matches chrome muted
+        border="E1E8EC",       # matches chrome border
         bg_alt="FFFFFF",
         amber="BF9B5A",        # professional gold accent
         green="4F8470",        # deep teal-green
     ),
+    template_path=_DOCS_DIR / "DXDesignAccounting_Template.pptx",
 )
 
 
 # Ordered registry. Order = display order in the gallery selector and
-# default-first in the samples generator. Production templates eventually
-# bind to these by id (TemplateRow.palette_id or via design_tokens).
+# default-first in the samples generator.
 NAMED_PALETTES: tuple[NamedPalette, ...] = (
     DXDESIGN_PALETTE,
     DXACCOUNTING_PALETTE,
