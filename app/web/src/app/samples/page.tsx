@@ -6,12 +6,23 @@ import { figureTypeLabel } from '@/lib/api';
 
 type Sample = {
   id: string;
+  palette: string;
   figure_type: string;
   title: string;
   prompt: string;
   notes: string;
   image: string;
   spec: unknown;
+};
+
+type PaletteOption = {
+  id: string;
+  label: string;
+};
+
+type Manifest = {
+  palettes: PaletteOption[];
+  samples: Sample[];
 };
 
 const ALL = '__all__';
@@ -28,8 +39,9 @@ function compareFigureTypes(a: string, b: string): number {
 }
 
 export default function SamplesPage() {
-  const [samples, setSamples] = useState<Sample[] | null>(null);
+  const [manifest, setManifest] = useState<Manifest | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [palette, setPalette] = useState<string | null>(null);
   const [figureType, setFigureType] = useState<string>(ALL);
   const [search, setSearch] = useState<string>('');
   const [active, setActive] = useState<Sample | null>(null);
@@ -39,10 +51,14 @@ export default function SamplesPage() {
     fetch('/samples/manifest.json')
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json() as Promise<Sample[]>;
+        return r.json() as Promise<Manifest>;
       })
       .then((data) => {
-        if (!cancelled) setSamples(data);
+        if (cancelled) return;
+        setManifest(data);
+        // Default to the first palette in the registry — the gallery
+        // selector lets the user toggle to other named palettes.
+        if (data.palettes.length > 0) setPalette(data.palettes[0].id);
       })
       .catch((e) => {
         if (!cancelled) setError(String(e));
@@ -52,17 +68,29 @@ export default function SamplesPage() {
     };
   }, []);
 
+  const samples = manifest?.samples ?? null;
+  const palettes = manifest?.palettes ?? [];
+
+  // Sample set scoped to the active palette. Done here (before any
+  // figure-type / search filtering) so per-palette counts the dropdown
+  // shows are correct.
+  const palettedSamples = useMemo(() => {
+    if (!samples) return [] as Sample[];
+    if (!palette) return samples;
+    return samples.filter((s) => s.palette === palette);
+  }, [samples, palette]);
+
   const figureTypes = useMemo(() => {
-    if (!samples) return [] as string[];
-    return Array.from(new Set(samples.map((s) => s.figure_type))).sort(
+    if (!palettedSamples.length) return [] as string[];
+    return Array.from(new Set(palettedSamples.map((s) => s.figure_type))).sort(
       compareFigureTypes,
     );
-  }, [samples]);
+  }, [palettedSamples]);
 
   const filtered = useMemo(() => {
-    if (!samples) return [] as Sample[];
+    if (!palettedSamples.length) return [] as Sample[];
     const q = search.trim().toLowerCase();
-    const matched = samples.filter((s) => {
+    const matched = palettedSamples.filter((s) => {
       if (figureType !== ALL && s.figure_type !== figureType) return false;
       if (!q) return true;
       return (
@@ -78,7 +106,7 @@ export default function SamplesPage() {
       const byType = compareFigureTypes(a.figure_type, b.figure_type);
       return byType !== 0 ? byType : a.id.localeCompare(b.id);
     });
-  }, [samples, figureType, search]);
+  }, [palettedSamples, figureType, search]);
 
   return (
     <section className="space-y-6">
@@ -91,6 +119,23 @@ export default function SamplesPage() {
       </header>
 
       <div className="flex flex-wrap items-center gap-3 rounded border border-purple-lt/40 bg-white px-4 py-3">
+        {palettes.length > 1 && (
+          <label className="flex items-center gap-2 text-sm">
+            <span className="text-muted">テンプレート:</span>
+            <select
+              value={palette ?? ''}
+              onChange={(e) => setPalette(e.target.value)}
+              className="rounded border border-purple-lt/60 px-2 py-1 text-sm"
+            >
+              {palettes.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
         <label className="flex items-center gap-2 text-sm">
           <span className="text-muted">図種:</span>
           <select
@@ -98,9 +143,9 @@ export default function SamplesPage() {
             onChange={(e) => setFigureType(e.target.value)}
             className="rounded border border-purple-lt/60 px-2 py-1 text-sm"
           >
-            <option value={ALL}>すべて ({samples?.length ?? 0})</option>
+            <option value={ALL}>すべて ({palettedSamples.length})</option>
             {figureTypes.map((ft) => {
-              const n = samples?.filter((s) => s.figure_type === ft).length ?? 0;
+              const n = palettedSamples.filter((s) => s.figure_type === ft).length;
               return (
                 <option key={ft} value={ft}>
                   {figureTypeLabel(ft)} ({n})
@@ -133,9 +178,9 @@ export default function SamplesPage() {
         </div>
       )}
 
-      {!samples && !error && <div className="text-sm text-muted">読み込み中…</div>}
+      {!manifest && !error && <div className="text-sm text-muted">読み込み中…</div>}
 
-      {samples && filtered.length === 0 && (
+      {manifest && filtered.length === 0 && (
         <div className="rounded border border-purple-lt/60 bg-white px-4 py-8 text-center text-sm text-muted">
           条件に合うサンプルがありません。
         </div>
@@ -144,7 +189,7 @@ export default function SamplesPage() {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {filtered.map((s) => (
           <button
-            key={s.id}
+            key={`${s.palette}/${s.id}`}
             type="button"
             onClick={() => setActive(s)}
             className="group flex flex-col rounded border border-purple-lt/60 bg-white text-left transition hover:border-purple hover:shadow"

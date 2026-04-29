@@ -35,6 +35,7 @@ from render.figure_renderers.base import EMUBox, RenderContext  # noqa: E402
 from render.figure_renderers.registry import REGISTRY as FIGURE_REGISTRY  # noqa: E402
 from render.layout_spec import emit_layout_spec  # noqa: E402
 from render.media import MediaRegistry  # noqa: E402
+from render.palettes import NAMED_PALETTES, NamedPalette  # noqa: E402
 from render.pptx_assembler import (  # noqa: E402
     finalize_media,
     read_template_slides,
@@ -44,7 +45,7 @@ from render.pptx_assembler import (  # noqa: E402
     write_output_slides,
 )
 from render.qa.pptx_to_png import render_pptx_to_pngs  # noqa: E402
-from render.shapes import DEFAULT_FONT, DEFAULT_PALETTE  # noqa: E402
+from render.shapes import DEFAULT_FONT, Palette  # noqa: E402
 from render.template_loader import repack, safe_unpack  # noqa: E402
 from scripts.samples_catalog import (  # noqa: E402
     BODY_H,
@@ -126,7 +127,7 @@ def _modify_slide(
 
 
 def _shapes_for_sample(
-    sample: Sample, media: MediaRegistry
+    sample: Sample, media: MediaRegistry, palette: Palette
 ) -> list[str]:
     """Produce the shape XML fragments for the body of one sample.
 
@@ -137,7 +138,7 @@ def _shapes_for_sample(
     icon-bearing renderers now light up.
     """
     if sample.spec is not None:
-        fragments, _ = emit_layout_spec(sample.spec, media=media)
+        fragments, _ = emit_layout_spec(sample.spec, palette=palette, media=media)
         return fragments
     if sample.figure_content is None:  # defensive — __post_init__ rules this out
         raise RuntimeError(f"sample {sample.id} has neither spec nor figure_content")
@@ -153,7 +154,7 @@ def _shapes_for_sample(
         )
     container = EMUBox(x=BODY_X, y=BODY_Y, w=BODY_W, h=BODY_H)
     ctx = RenderContext(
-        palette=DEFAULT_PALETTE,
+        palette=palette,
         font=DEFAULT_FONT,
         next_shape_id=2000,
         media=media,
@@ -163,9 +164,12 @@ def _shapes_for_sample(
     return list(out.shapes_xml)
 
 
-def _build_pptx_bytes(work_dir: Path, sample: Sample) -> bytes:
+def _build_pptx_bytes(
+    work_dir: Path, sample: Sample, palette: Palette
+) -> bytes:
     """Unpack the template, mutate slide{TEMPLATE_SLIDE_INDEX}.xml,
-    keep just that one slide, repack."""
+    keep just that one slide, repack. Body shapes pick up the palette
+    so each named template renders the same content in its own colors."""
     if work_dir.exists():
         shutil.rmtree(work_dir)
     unpacked = safe_unpack(TEMPLATE_PATH, work_dir)
@@ -178,7 +182,7 @@ def _build_pptx_bytes(work_dir: Path, sample: Sample) -> bytes:
     base = template_slides[TEMPLATE_SLIDE_INDEX]
 
     media = MediaRegistry()
-    fragments = _shapes_for_sample(sample, media)
+    fragments = _shapes_for_sample(sample, media, palette)
     new_slide_xml = _modify_slide(
         base.xml,
         title=sample.title,
@@ -213,6 +217,58 @@ def _spec_to_dict(sample: Sample) -> dict[str, object]:
     return {"figure_content": sample.figure_content}
 
 
+def _process_palette(
+    np: NamedPalette, failures: list[tuple[str, str]]
+) -> list[dict[str, object]]:
+    """Render every catalog sample for a single named palette.
+
+    Output goes to ``app/web/public/samples/{palette_id}/{figure_type}/{id}.png``;
+    each manifest entry tags the palette so the gallery selector can
+    filter/swap.
+    """
+    palette_out_dir = OUT_DIR / np.id
+    palette_out_dir.mkdir(parents=True, exist_ok=True)
+    palette_work_dir = WORK_DIR / np.id
+    palette_work_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest: list[dict[str, object]] = []
+    for i, sample in enumerate(SAMPLES, start=1):
+        log.info(
+            "[%s %d/%d] %s (%s)",
+            np.id, i, len(SAMPLES), sample.id, sample.figure_type,
+        )
+        try:
+            pptx = _build_pptx_bytes(
+                palette_work_dir / sample.id, sample, np.palette
+            )
+            pngs = render_pptx_to_pngs(pptx, dpi=120, timeout_s=120)
+        except Exception as e:
+            log.exception("failed: %s/%s", np.id, sample.id)
+            failures.append((f"{np.id}/{sample.id}", str(e)))
+            continue
+        if not pngs:
+            failures.append((f"{np.id}/{sample.id}", "no PNG produced"))
+            continue
+        target_dir = palette_out_dir / sample.figure_type
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir / f"{sample.id}.png"
+        target_path.write_bytes(pngs[0])
+        rel_path = target_path.relative_to(OUT_DIR.parent).as_posix()
+        manifest.append(
+            {
+                "id": sample.id,
+                "palette": np.id,
+                "figure_type": sample.figure_type,
+                "title": sample.title,
+                "prompt": sample.prompt,
+                "notes": sample.notes,
+                "image": "/" + rel_path,
+                "spec": _spec_to_dict(sample),
+            }
+        )
+    return manifest
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
@@ -223,42 +279,29 @@ def main() -> int:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     WORK_DIR.mkdir(parents=True, exist_ok=True)
 
-    manifest: list[dict[str, object]] = []
+    # Wipe the old single-palette layout (figure_type directories at
+    # OUT_DIR root). The new layout puts everything under per-palette
+    # subdirs, so the legacy ones would become orphan stale assets.
+    palette_ids = {np.id for np in NAMED_PALETTES}
+    for child in OUT_DIR.iterdir():
+        if child.is_dir() and child.name not in palette_ids:
+            shutil.rmtree(child, ignore_errors=True)
+
     failures: list[tuple[str, str]] = []
+    all_entries: list[dict[str, object]] = []
+    for np in NAMED_PALETTES:
+        all_entries.extend(_process_palette(np, failures))
 
-    for i, sample in enumerate(SAMPLES, start=1):
-        log.info("[%d/%d] %s (%s)", i, len(SAMPLES), sample.id, sample.figure_type)
-        try:
-            pptx = _build_pptx_bytes(WORK_DIR / sample.id, sample)
-            pngs = render_pptx_to_pngs(pptx, dpi=120, timeout_s=120)
-        except Exception as e:
-            log.exception("failed: %s", sample.id)
-            failures.append((sample.id, str(e)))
-            continue
-        if not pngs:
-            failures.append((sample.id, "no PNG produced"))
-            continue
-        target_dir = OUT_DIR / sample.figure_type
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target_path = target_dir / f"{sample.id}.png"
-        target_path.write_bytes(pngs[0])
-        rel_path = target_path.relative_to(OUT_DIR.parent).as_posix()
-        manifest.append(
-            {
-                "id": sample.id,
-                "figure_type": sample.figure_type,
-                "title": sample.title,
-                "prompt": sample.prompt,
-                "notes": sample.notes,
-                "image": "/" + rel_path,
-                "spec": _spec_to_dict(sample),
-            }
-        )
-
-    # Sort manifest by figure_type then id for stable diffs.
-    manifest.sort(key=lambda m: (m["figure_type"], m["id"]))
+    # Sort manifest by palette then figure_type then id for stable diffs.
+    all_entries.sort(key=lambda m: (m["palette"], m["figure_type"], m["id"]))
+    manifest_doc = {
+        "palettes": [
+            {"id": np.id, "label": np.label} for np in NAMED_PALETTES
+        ],
+        "samples": all_entries,
+    }
     (OUT_DIR / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2),
+        json.dumps(manifest_doc, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
@@ -266,7 +309,10 @@ def main() -> int:
     if WORK_DIR.exists():
         shutil.rmtree(WORK_DIR, ignore_errors=True)
 
-    log.info("wrote %d samples to %s", len(manifest), OUT_DIR)
+    log.info(
+        "wrote %d sample entries across %d palette(s) to %s",
+        len(all_entries), len(NAMED_PALETTES), OUT_DIR,
+    )
     if failures:
         log.error("failures (%d):", len(failures))
         for sid, err in failures:
