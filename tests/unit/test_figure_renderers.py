@@ -48,6 +48,43 @@ def test_table_rejects_bad_input() -> None:
     assert not r.validate({"headers": ["A", "B"], "rows": []}).ok
 
 
+def test_table_rejects_too_many_rows() -> None:
+    """The renderer caps rows per slide so dense tables don't shrink
+    text into invisibility — the LLM must split overflow."""
+    r = renderer_for("table")
+    too_many = {
+        "headers": ["A", "B"],
+        "rows": [[f"r{i}", str(i)] for i in range(15)],
+    }
+    result = r.validate(too_many)
+    assert not result.ok
+    assert any("exceeds max" in e for e in result.errors)
+
+
+def test_table_renders_dense_body() -> None:
+    """11-row table (the user's "工数・費用内訳サマリー" shape) renders
+    with body text at a usable size — auto_fit-driven shrinkage to
+    invisibility was the original bug."""
+    r = renderer_for("table")
+    content = {
+        "headers": ["要望", "主要工程", "工数(h)", "備考"],
+        "rows": [
+            [f"行{i}", f"工程{i}", f"{i}h", "備考" if i % 2 == 0 else ""]
+            for i in range(11)
+        ],
+    }
+    assert r.validate(content).ok
+    out = r.render(content, _box(), _ctx())
+    # 1 header bg + 4 header cells + 11 row bgs + 11*4 cells = 60
+    assert len(out.shapes_xml) == 1 + 4 + 11 + 11 * 4
+    # No <a:normAutofit> in cell shapes (auto_fit was the shrinkage
+    # culprit; this asserts the fix stays in place).
+    body_cells = [s for s in out.shapes_xml if 'name="td-' in s]
+    assert body_cells, "body cell text shapes missing"
+    for cell in body_cells:
+        assert "normAutofit" not in cell, "auto_fit must be off on body cells"
+
+
 def test_cards_grid_renders() -> None:
     r = renderer_for("cards_grid")
     out = r.render(
