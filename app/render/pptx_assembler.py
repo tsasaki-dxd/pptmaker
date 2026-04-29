@@ -289,7 +289,14 @@ def finalize_media(
             warnings.append(f"unsupported mime {mime} for asset {asset_id}")
             continue
 
-        data = fetcher(desc.s3_key)  # type: ignore[operator]
+        # Prefer inline bytes (icons, render-time-generated images) over
+        # an S3 fetch. Falls back to fetcher for user-uploaded assets
+        # that only carry an s3_key.
+        inline = getattr(desc, "inline_bytes", None)
+        if inline is not None:
+            data: bytes | None = inline
+        else:
+            data = fetcher(desc.s3_key)  # type: ignore[operator]
         if data is None:
             warnings.append(f"missing bytes for asset {asset_id} (s3_key={desc.s3_key})")
         else:

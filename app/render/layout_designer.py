@@ -33,6 +33,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from .icon_renderer import ICON_CATALOG
 from .layout_spec import LayoutSpec
 
 log = logging.getLogger("slideforge.layout_designer")
@@ -69,6 +70,12 @@ JSON Schema に従って LayoutSpec として返してください。
    "text":"...","fill":"<HEX/token>","text_color":"<HEX/token>","size_pt":int}}
 - {{"kind":"line","name":"...","x":int,"y":int,"w":int,"h":int(1〜),
    "color":"<HEX/token>"}}
+- {{"kind":"icon","name":"...","x":int,"y":int,"w":int,"h":int,
+   "icon":"<Lucide name from ICON_CATALOG>","color":"<HEX/token>"}}
+   ※ Lucide ライン系アイコン。値の強調、ステップマーカー、SWOT 象限ラベル横、
+   　 KPI カード左肩、プロセスフローのステップピル内などに置くと意味が伝わる。
+   　 サイズ目安: 20–48 EMU の正方形（200,000 ～ 480,000 EMU）。
+   　 利用可能な icon 名は【利用可能アイコン】セクション参照。
 - {{"kind":"table","name":"...","x":int,"y":int,"w":int,"h":int,
    "rows":[["セル","セル",...], ...],
    // セルは文字列、または以下の CellSpec (混在可)
@@ -128,9 +135,31 @@ HEX 6 桁の代わりに以下のセマンティック名が使えます:
     場合は、矢印は line（細長 rect）で代用、判定ノードは rect で
     水色ハイライトなど。
 - 余白を取る（ラベルと値、カードとカード間）。
-- フォントサイズは情報階層を反映: タイトル 14-18pt, ラベル 9-11pt, 本文 10-12pt, 注記 8-9pt。
+- 【タイポグラフィスケール】従来は 9〜12pt に密集してフラットだった。
+  以下の階段を意図的に使い分けて視覚的階層を作ること:
+    micro 8 / caption 9 / label 10 / body 11 / body_lg 12 /
+    title 14 / h3 18 / h2 24 / h1 28 / display 36
+  指針:
+    * KPI 数値などの主要メトリック → h1 (28pt) 〜 display (36pt) bold
+    * セクション見出し / 引用 → h3 (18pt)
+    * カードタイトル / 強調ラベル → body_lg (12pt) bold
+    * 標準本文 → body (11pt)
+    * テーブル本文 / 通常ラベル → label (10pt)
+    * 補足・注記 → caption (9pt) muted
+- 【headline_message】slide.headline_message が非空のときは、本文領域の
+  上端付近に **h2 (24pt) bold + primary_dark + 下に 4–6 EMU の primary 細線
+  アクセント** で配置すること。スライド全体の "結論ヘッドライン" として
+  読み手の目に最初に飛び込ませる。図形本体は headline 帯の下に配置する。
+  headline_message が null/空のときはこの帯を入れない。
+- 【アイコン】業務文脈で意味の通るアイコンを積極的に使う。
+  例: 売上指標 → "trending-up" / 防御・守り → "shield" / 警告 → "alert-triangle"
+  / アイデア → "lightbulb" / 顧客 → "users" / 拠点 → "building" /
+  時間軸 → "clock"。装飾としてではなく "意味の補助" として置く。
 - 色は palette token を優先（HEX 直書きは特別な強調色のみ）。
 - N 個の要素を等分配置するときは座標計算で隙間を均等に。
+
+【利用可能アイコン】
+{icon_catalog}
 
 【ブループリントスライド】
 {slide_json}
@@ -231,6 +260,7 @@ def design_layout(
         body_y=body_y,
         body_w=body_w,
         body_h=body_h,
+        icon_catalog=", ".join(ICON_CATALOG),
     )
 
     last_error: str | None = None

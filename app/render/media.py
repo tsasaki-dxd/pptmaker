@@ -12,6 +12,11 @@ class ImageAssetDescriptor:
     mime: str
     width_px: int | None
     height_px: int | None
+    # Optional in-memory bytes. When set, ``finalize_media`` writes
+    # these directly instead of calling ``fetcher(s3_key)``. Used for
+    # icons and other render-time-generated assets that have no S3
+    # backing object.
+    inline_bytes: bytes | None = None
 
 
 @dataclass
@@ -24,6 +29,31 @@ class MediaRegistry:
         if desc.asset_id not in self.entries:
             self.entries[desc.asset_id] = desc
         rid = self._rid_for(desc.asset_id)
+        self.slide_usages.setdefault(slide_index, set()).add(rid)
+        return rid
+
+    def register_inline(
+        self,
+        asset_id: str,
+        slide_index: int,
+        data: bytes,
+        mime: str = "image/png",
+    ) -> str:
+        """Convenience for inline assets (icons, generated images).
+
+        First call for a given ``asset_id`` stores the bytes; subsequent
+        calls dedup — the same icon used on N slides is embedded once.
+        """
+        if asset_id not in self.entries:
+            self.entries[asset_id] = ImageAssetDescriptor(
+                asset_id=asset_id,
+                s3_key=f"inline://{asset_id}",
+                mime=mime,
+                width_px=None,
+                height_px=None,
+                inline_bytes=data,
+            )
+        rid = self._rid_for(asset_id)
         self.slide_usages.setdefault(slide_index, set()).add(rid)
         return rid
 

@@ -36,6 +36,7 @@ from .shapes import (
     TextParagraph,
     TextRun,
     bar_chart_shape,
+    icon_pic,
     line_chart_shape,
     pie_chart_shape,
     pill_label,
@@ -127,6 +128,30 @@ class LineShape(_Base):
     w: int = Field(gt=0)
     h: int = Field(gt=0)
     color: str = "border"
+
+
+class IconShape(_Base):
+    """Lucide-style line icon rasterized to PNG and embedded as <p:pic>.
+
+    The designer LLM emits this primitive to place small mark icons next
+    to KPI values, SWOT quadrant labels, process steps, etc. The icon
+    name must be in ``app.render.icon_renderer.ICON_CATALOG``; unknown
+    names degrade to a colored rectangle stub at emit time so the slide
+    still renders.
+
+    Color accepts palette tokens (``primary``, ``primary_dark``, …) or
+    a 6-char HEX. The PNG is rasterized once per (name, color) and
+    deduped through the MediaRegistry.
+    """
+
+    kind: Literal["icon"] = "icon"
+    name: str = "icon"
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    w: int = Field(gt=0)
+    h: int = Field(gt=0)
+    icon: str = Field(min_length=1)
+    color: str = "primary"
 
 
 # ---- Table / Chart specs -----------------------------------------------
@@ -312,7 +337,7 @@ class PieChartShape(_Base):
 
 Shape = Annotated[
     (
-        RectShape | TextShape | PillShape | LineShape
+        RectShape | TextShape | PillShape | LineShape | IconShape
         | TableShape | BarChartShape | LineChartShape | PieChartShape
     ),
     Field(discriminator="kind"),
@@ -363,8 +388,16 @@ def emit_shape(
     *,
     palette: Palette = DEFAULT_PALETTE,
     font: str = DEFAULT_FONT,
+    media: object | None = None,
+    slide_index: int = 0,
 ) -> str:
-    """Translate one LayoutSpec shape into PPTX shape XML."""
+    """Translate one LayoutSpec shape into PPTX shape XML.
+
+    ``media`` is required for IconShape (the icon's PNG bytes are
+    rasterized and registered against the MediaRegistry). When None,
+    IconShape degrades to a placeholder rectangle so the deck still
+    renders.
+    """
     if isinstance(shape, RectShape):
         fill = resolve_palette_color(shape.fill, palette)
         stroke = (
@@ -447,6 +480,36 @@ def emit_shape(
             shape.h,
             resolve_palette_color(shape.color, palette),
         )
+
+    if isinstance(shape, IconShape):
+        color_hex = resolve_palette_color(shape.color, palette)
+        if media is None:
+            # Stub: small colored square so the deck still has something
+            # at the icon's position when no MediaRegistry was threaded
+            # through (e.g. legacy unit tests of emit_shape).
+            return rect_shape(
+                sp_id, shape.name, shape.x, shape.y, shape.w, shape.h, color_hex
+            )
+        # icon_renderer raises ValueError for unknown names. Catch it
+        # here so one bad LLM emission doesn't kill the slide; degrade
+        # to a colored rectangle in that case.
+        try:
+            return icon_pic(
+                sp_id,
+                shape.icon,
+                media,
+                slide_index,
+                shape.x,
+                shape.y,
+                shape.w,
+                shape.h,
+                color=color_hex,
+                shape_name=shape.name,
+            )
+        except (ValueError, RuntimeError):
+            return rect_shape(
+                sp_id, shape.name, shape.x, shape.y, shape.w, shape.h, color_hex
+            )
 
     if isinstance(shape, TableShape):
         # Translate CellSpec / ColumnSpec into a renderer-friendly
@@ -621,13 +684,28 @@ def emit_layout_spec(
     palette: Palette = DEFAULT_PALETTE,
     font: str = DEFAULT_FONT,
     start_shape_id: int = 1000,
+    media: object | None = None,
 ) -> tuple[list[str], int]:
     """Emit every shape in `spec.shapes` and return ``(xml_fragments,
     next_shape_id)`` so the caller can chain with other shape sources
-    that share the same id-space."""
+    that share the same id-space.
+
+    ``media`` is the MediaRegistry the slide is being assembled against;
+    only icon-bearing specs need it. The spec's ``slide_index`` is used
+    for media usage tracking.
+    """
     fragments: list[str] = []
     sid = start_shape_id
     for shape in spec.shapes:
-        fragments.append(emit_shape(shape, sid, palette=palette, font=font))
+        fragments.append(
+            emit_shape(
+                shape,
+                sid,
+                palette=palette,
+                font=font,
+                media=media,
+                slide_index=spec.slide_index,
+            )
+        )
         sid += 1
     return fragments, sid

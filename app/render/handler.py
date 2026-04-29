@@ -290,11 +290,16 @@ def _collect_designer_result(
 
 
 def _emit_spec_if_any(
-    spec: Any | None, *, start_shape_id: int
+    spec: Any | None,
+    *,
+    start_shape_id: int,
+    media: Any | None = None,
 ) -> list[str] | None:
     if spec is None:
         return None
-    fragments, _next_id = emit_layout_spec(spec, start_shape_id=start_shape_id)
+    fragments, _next_id = emit_layout_spec(
+        spec, start_shape_id=start_shape_id, media=media
+    )
     return fragments
 
 
@@ -338,6 +343,8 @@ def _maybe_design_layout(
     if spec is None:
         return None
 
+    # No MediaRegistry plumbed in for the serial path (test-only entry
+    # point). IconShape will degrade to a placeholder rect there.
     fragments, _next_id = emit_layout_spec(spec, start_shape_id=start_shape_id)
     return fragments
 
@@ -412,7 +419,9 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
             slots = list(layout_entry.get("slots") or [])
 
             spec = _collect_designer_result(designer_futures, i)
-            extra_shapes_xml = _emit_spec_if_any(spec, start_shape_id=1000 + 100 * i)
+            extra_shapes_xml = _emit_spec_if_any(
+                spec, start_shape_id=1000 + 100 * i, media=registry
+            )
 
             section_index: int | None = None
             if layout == "section_divider":
@@ -430,6 +439,7 @@ def _process_job(job: RenderJob) -> dict[str, Any]:
                     total_slides=len(blueprint_slides),
                     extra_shapes_xml=extra_shapes_xml,
                     section_index=section_index,
+                    media=registry,
                 )
             except Exception:
                 # Leave the unmodified template XML in place for this
