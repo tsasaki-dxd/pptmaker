@@ -58,10 +58,11 @@ from scripts.samples_catalog import (  # noqa: E402
 
 log = logging.getLogger("samples")
 
-TEMPLATE_PATH = _REPO_ROOT / "docs" / "DXDesignSystem_Template.pptx"
+# Per-palette template paths now live on the NamedPalette entries
+# themselves; each palette pairs body colors with its own .pptx
+# chrome (logo, eyebrow, accent bars). See render/palettes.py.
 OUT_DIR = _REPO_ROOT / "app" / "web" / "public" / "samples"
 WORK_DIR = _REPO_ROOT / ".samples_work"
-TEMPLATE_SLIDE_INDEX = 4  # the "content" page inside DXDesignSystem
 
 
 # ------------------------ slide XML mutation -------------------------------
@@ -165,21 +166,23 @@ def _shapes_for_sample(
 
 
 def _build_pptx_bytes(
-    work_dir: Path, sample: Sample, palette: Palette
+    work_dir: Path, sample: Sample, palette: Palette,
+    template_path: Path, content_slide_index: int,
 ) -> bytes:
-    """Unpack the template, mutate slide{TEMPLATE_SLIDE_INDEX}.xml,
-    keep just that one slide, repack. Body shapes pick up the palette
-    so each named template renders the same content in its own colors."""
+    """Unpack ``template_path``, mutate the content slide, keep just
+    that one slide, repack. Body shapes pick up ``palette`` so each
+    named template renders the same content in its own colors AND
+    its own slide chrome (logo, eyebrow, accent bar, page footer)."""
     if work_dir.exists():
         shutil.rmtree(work_dir)
-    unpacked = safe_unpack(TEMPLATE_PATH, work_dir)
+    unpacked = safe_unpack(template_path, work_dir)
 
     template_slides = read_template_slides(unpacked.root)
-    if TEMPLATE_SLIDE_INDEX not in template_slides:
+    if content_slide_index not in template_slides:
         raise RuntimeError(
-            f"template missing slide{TEMPLATE_SLIDE_INDEX}.xml — adjust constant"
+            f"{template_path.name} missing slide{content_slide_index}.xml"
         )
-    base = template_slides[TEMPLATE_SLIDE_INDEX]
+    base = template_slides[content_slide_index]
 
     media = MediaRegistry()
     fragments = _shapes_for_sample(sample, media, palette)
@@ -231,6 +234,11 @@ def _process_palette(
     palette_work_dir = WORK_DIR / np.id
     palette_work_dir.mkdir(parents=True, exist_ok=True)
 
+    if not np.template_path.exists():
+        log.error("[%s] template not found: %s", np.id, np.template_path)
+        failures.append((np.id, f"template not found: {np.template_path.name}"))
+        return []
+
     manifest: list[dict[str, object]] = []
     for i, sample in enumerate(SAMPLES, start=1):
         log.info(
@@ -239,7 +247,11 @@ def _process_palette(
         )
         try:
             pptx = _build_pptx_bytes(
-                palette_work_dir / sample.id, sample, np.palette
+                palette_work_dir / sample.id,
+                sample,
+                np.palette,
+                np.template_path,
+                np.content_slide_index,
             )
             pngs = render_pptx_to_pngs(pptx, dpi=120, timeout_s=120)
         except Exception as e:
@@ -271,10 +283,6 @@ def _process_palette(
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-
-    if not TEMPLATE_PATH.exists():
-        log.error("template not found: %s", TEMPLATE_PATH)
-        return 1
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     WORK_DIR.mkdir(parents=True, exist_ok=True)
