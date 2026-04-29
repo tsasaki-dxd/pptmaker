@@ -92,8 +92,13 @@ export type FigureType = (typeof FIGURE_TYPES)[number];
  * Display labels for figure types (UI-only). The wire format stays the
  * machine-readable snake_case identifier; users see Japanese.
  * Falls back to the raw id if a future backend type isn't in this map.
+ *
+ * Includes a few chart / composite ids ("bar_chart", "line_chart",
+ * "pie_chart", "composite") that are NOT in FIGURE_TYPES — those only
+ * appear in the samples gallery (LayoutSpec-only specimens) and the
+ * dropdown lists them by raw id without these labels.
  */
-export const FIGURE_TYPE_LABELS: Record<FigureType, string> = {
+export const FIGURE_TYPE_LABELS: Record<string, string> = {
   table: 'テーブル',
   cards_grid: 'カードグリッド',
   two_column: '2カラム',
@@ -121,10 +126,15 @@ export const FIGURE_TYPE_LABELS: Record<FigureType, string> = {
   value_chain: 'バリューチェーン',
   business_canvas: 'ビジネスキャンバス',
   scheme_diagram: 'スキーム図',
+  // Samples-gallery-only entries (LayoutSpec primitives, not figure_type renderers).
+  bar_chart: '棒グラフ',
+  line_chart: '折れ線グラフ',
+  pie_chart: '円グラフ',
+  composite: '複合レイアウト',
 };
 
 export function figureTypeLabel(ft: string): string {
-  return FIGURE_TYPE_LABELS[ft as FigureType] ?? ft;
+  return FIGURE_TYPE_LABELS[ft] ?? ft;
 }
 
 export interface SlideTemplateMapping {
