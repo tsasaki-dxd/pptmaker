@@ -34,7 +34,9 @@ import render.figure_renderers  # noqa: E402, F401  # autoload registry side-eff
 from render.figure_renderers.base import EMUBox, RenderContext  # noqa: E402
 from render.figure_renderers.registry import REGISTRY as FIGURE_REGISTRY  # noqa: E402
 from render.layout_spec import emit_layout_spec  # noqa: E402
+from render.media import MediaRegistry  # noqa: E402
 from render.pptx_assembler import (  # noqa: E402
+    finalize_media,
     read_template_slides,
     rewrite_content_types,
     rewrite_presentation_rels,
@@ -123,15 +125,19 @@ def _modify_slide(
 # ------------------------ rendering ---------------------------------------
 
 
-def _shapes_for_sample(sample: Sample) -> list[str]:
+def _shapes_for_sample(
+    sample: Sample, media: MediaRegistry
+) -> list[str]:
     """Produce the shape XML fragments for the body of one sample.
 
-    LayoutSpec samples go through emit_layout_spec; figure_renderer
-    samples go through the registered renderer's render() with a
-    minimal RenderContext (no media — image_slot needs the live
-    pipeline)."""
+    The MediaRegistry is threaded through so renderers (kpi_dashboard,
+    swot, process_flow, business_canvas, icon_list) can register the
+    Lucide icon PNGs they emit. ``image_slot`` samples still won't get
+    real images because they require a resolved S3 fetch, but
+    icon-bearing renderers now light up.
+    """
     if sample.spec is not None:
-        fragments, _ = emit_layout_spec(sample.spec)
+        fragments, _ = emit_layout_spec(sample.spec, media=media)
         return fragments
     if sample.figure_content is None:  # defensive — __post_init__ rules this out
         raise RuntimeError(f"sample {sample.id} has neither spec nor figure_content")
@@ -150,7 +156,7 @@ def _shapes_for_sample(sample: Sample) -> list[str]:
         palette=DEFAULT_PALETTE,
         font=DEFAULT_FONT,
         next_shape_id=2000,
-        media=None,
+        media=media,
         slide_index=1,
     )
     out = renderer.render(sample.figure_content, container, ctx)
@@ -171,7 +177,8 @@ def _build_pptx_bytes(work_dir: Path, sample: Sample) -> bytes:
         )
     base = template_slides[TEMPLATE_SLIDE_INDEX]
 
-    fragments = _shapes_for_sample(sample)
+    media = MediaRegistry()
+    fragments = _shapes_for_sample(sample, media)
     new_slide_xml = _modify_slide(
         base.xml,
         title=sample.title,
@@ -183,6 +190,12 @@ def _build_pptx_bytes(work_dir: Path, sample: Sample) -> bytes:
     rewrite_presentation_xml(unpacked.root, slide_count=1)
     rewrite_presentation_rels(unpacked.root, slide_count=1)
     rewrite_content_types(unpacked.root, slide_count=1)
+
+    # Materialize any icon PNGs the renderer registered. Samples never
+    # use S3-backed images, so the fetcher always returns None — only
+    # inline_bytes (Lucide icons) actually land on disk.
+    if media.entries:
+        finalize_media(unpacked.root, media, lambda _key: None)
 
     out_pptx = work_dir.parent / f"_sample_{sample.id}.pptx"
     repack(unpacked, out_pptx)

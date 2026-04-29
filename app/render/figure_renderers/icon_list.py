@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..shapes import fit_stack, rect_shape, text_box
+from ..icon_renderer import is_known as _icon_known
+from ..shapes import fit_stack, icon_pic, rect_shape, text_box
+from ..typography import TYPE_SCALE as T
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
@@ -74,24 +76,58 @@ class IconListRenderer(FigureRenderer):
                 )
             )
             sid += 1
-            glyph = item.get("icon") or "●"
-            shapes.append(
-                text_box(
-                    sid,
-                    f"il-icon-ch-{i}",
-                    icon_x,
-                    icon_y,
-                    icon_sz,
-                    icon_sz,
-                    glyph,
-                    size_pt=18,
-                    bold=True,
-                    color="FFFFFF",
-                    align="ctr",
-                    font=ctx.font,
+
+            # Icon resolution priority:
+            #  1. item.icon names a known Lucide icon → render SVG icon
+            #  2. item.icon is a Unicode glyph (legacy) → render as text
+            #  3. nothing → fall back to bullet "●"
+            raw_icon = item.get("icon")
+            used_lucide = False
+            if (
+                ctx.media is not None
+                and isinstance(raw_icon, str)
+                and _icon_known(raw_icon)
+            ):
+                # Inset by ~25% so the line-art icon doesn't kiss the
+                # background-square edge.
+                inset = icon_sz // 4
+                try:
+                    shapes.append(
+                        icon_pic(
+                            sid,
+                            raw_icon,
+                            ctx.media,
+                            ctx.slide_index or 0,
+                            icon_x + inset,
+                            icon_y + inset,
+                            icon_sz - 2 * inset,
+                            icon_sz - 2 * inset,
+                            color="FFFFFF",
+                        )
+                    )
+                    sid += 1
+                    used_lucide = True
+                except (ValueError, RuntimeError):
+                    used_lucide = False
+            if not used_lucide:
+                glyph = raw_icon if isinstance(raw_icon, str) and raw_icon else "●"
+                shapes.append(
+                    text_box(
+                        sid,
+                        f"il-icon-ch-{i}",
+                        icon_x,
+                        icon_y,
+                        icon_sz,
+                        icon_sz,
+                        glyph,
+                        size_pt=T["h3"],
+                        bold=True,
+                        color="FFFFFF",
+                        align="ctr",
+                        font=ctx.font,
+                    )
                 )
-            )
-            sid += 1
+                sid += 1
 
             text_x = icon_x + icon_sz + 200000
             text_w = container.w - (text_x - container.x)
@@ -106,7 +142,7 @@ class IconListRenderer(FigureRenderer):
                     text_w,
                     title_h,
                     item["title"],
-                    size_pt=12,
+                    size_pt=T["body_lg"],
                     bold=True,
                     color=p.purple_dk,
                     font=ctx.font,
@@ -124,7 +160,7 @@ class IconListRenderer(FigureRenderer):
                         text_w,
                         row_h - title_h,
                         body,
-                        size_pt=10,
+                        size_pt=T["label"],
                         color=p.dark,
                         font=ctx.font,
                         auto_fit=True,

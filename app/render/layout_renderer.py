@@ -390,6 +390,7 @@ def render_content_slide(
     total_slides: int | None = None,
     extra_shapes_xml: list[str] | None = None,
     section_index: int | None = None,
+    media: object | None = None,
 ) -> str:
     """Return updated slide XML with:
       1. Title placeholder text replaced.
@@ -490,7 +491,11 @@ def render_content_slide(
     if _slot_render_enabled() and slots is not None:
         out = _strip_body_placeholders(out)
         ctx = RenderContext(
-            palette=effective_palette, font=font, next_shape_id=start_shape_id
+            palette=effective_palette,
+            font=font,
+            next_shape_id=start_shape_id,
+            media=media,  # type: ignore[arg-type]
+            slide_index=req.slide_index,
         )
         fragments, _next_id = _render_slots(slots, req, ctx)
         if fragments:
@@ -504,7 +509,11 @@ def render_content_slide(
         if not vr.ok:
             raise ValueError(f"invalid content for {req.figure_type}: {vr.errors}")
         ctx = RenderContext(
-            palette=effective_palette, font=font, next_shape_id=start_shape_id
+            palette=effective_palette,
+            font=font,
+            next_shape_id=start_shape_id,
+            media=media,  # type: ignore[arg-type]
+            slide_index=req.slide_index,
         )
         container = req.body_area
         result = renderer.render(req.content, container, ctx)

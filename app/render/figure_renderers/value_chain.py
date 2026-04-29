@@ -41,6 +41,7 @@ from ..shapes import (
     text_box,
     text_box_paragraphs,
 )
+from ..typography import TYPE_SCALE as T
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
@@ -326,7 +327,7 @@ class ValueChainRenderer(FigureRenderer):
                         label_w,
                         actual_band_h,
                         entry["label"],
-                        size_pt=11,
+                        size_pt=T["body"],
                         bold=True,
                         color=p.dark,
                         font=ctx.font,
@@ -345,7 +346,7 @@ class ValueChainRenderer(FigureRenderer):
                             items_w,
                             actual_band_h,
                             items_text,
-                            size_pt=9,
+                            size_pt=T["caption"],
                             color=p.muted,
                             font=ctx.font,
                             align="l",
@@ -401,7 +402,7 @@ class ValueChainRenderer(FigureRenderer):
                     box_w - 2 * indent_emu,
                     chev_h - 60000,
                     entry["label"],
-                    size_pt=12,
+                    size_pt=T["body_lg"],
                     bold=True,
                     color="FFFFFF",
                     font=ctx.font,
@@ -435,7 +436,7 @@ class ValueChainRenderer(FigureRenderer):
                     box_w - 2 * indent_emu,
                     chev_h - 60000,
                     margin_norm["label"],
-                    size_pt=12,
+                    size_pt=T["body_lg"],
                     bold=True,
                     color="FFFFFF",
                     font=ctx.font,
@@ -508,7 +509,7 @@ class ValueChainRenderer(FigureRenderer):
                             runs=(
                                 TextRun(
                                     text="・ " + str(it),
-                                    size_pt=9,
+                                    size_pt=T["caption"],
                                     color=p.dark,
                                 ),
                             ),

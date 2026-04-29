@@ -4,12 +4,26 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from ..shapes import _i, rect_shape, text_box
+from ..icon_renderer import is_known as _icon_known
+from ..shapes import _i, icon_pic, rect_shape, text_box
+from ..typography import TYPE_SCALE as T
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
 _MIN_STEPS = 3
 _MAX_STEPS = 6
+
+# First step → "rocket" (kickoff), middle → "settings" / "workflow" /
+# "zap", last → "check-circle" (done). Cycled by step position so any
+# 3-6 step flow gets reasonable coverage without per-step hints.
+_STEP_ICON_CYCLE: tuple[str, ...] = (
+    "rocket",
+    "settings",
+    "workflow",
+    "zap",
+    "refresh-cw",
+    "check-circle",
+)
 
 
 def _chevron(
@@ -85,16 +99,48 @@ class ProcessFlowRenderer(FigureRenderer):
                 rect_shape(sid, f"pf-pill-{i}", sx, pill_y, pill_w, pill_h, p.purple)
             )
             sid += 1
+
+            # Per-step icon at the pill's left edge. Honors a per-step
+            # `icon` field if it names a known Lucide icon, otherwise
+            # cycles through the default sequence.
+            step_icon_size = min(pill_h - 120000, 360000)
+            icon_pad = 60000
+            label_left = sx + 80000
+            icon_name = (
+                step.get("icon")
+                if isinstance(step.get("icon"), str) and _icon_known(step["icon"])
+                else _STEP_ICON_CYCLE[i % len(_STEP_ICON_CYCLE)]
+            )
+            if ctx.media is not None:
+                try:
+                    shapes.append(
+                        icon_pic(
+                            sid,
+                            icon_name,
+                            ctx.media,
+                            ctx.slide_index or 0,
+                            sx + icon_pad,
+                            pill_y + (pill_h - step_icon_size) // 2,
+                            step_icon_size,
+                            step_icon_size,
+                            color="FFFFFF",
+                        )
+                    )
+                    sid += 1
+                    label_left = sx + icon_pad + step_icon_size + 60000
+                except (ValueError, RuntimeError):
+                    pass
+
             shapes.append(
                 text_box(
                     sid,
                     f"pf-label-{i}",
-                    sx + 80000,
+                    label_left,
                     pill_y + pill_h // 2 - 180000,
-                    pill_w - 160000,
+                    sx + pill_w - label_left - 80000,
                     360000,
                     step["label"],
-                    size_pt=12,
+                    size_pt=T["body_lg"],
                     bold=True,
                     color="FFFFFF",
                     align="ctr",
@@ -114,7 +160,7 @@ class ProcessFlowRenderer(FigureRenderer):
                         pill_w - 80000,
                         container.h - pill_h - (pill_y - container.y) - 80000,
                         body,
-                        size_pt=9,
+                        size_pt=T["caption"],
                         color=p.dark,
                         align="ctr",
                         font=ctx.font,

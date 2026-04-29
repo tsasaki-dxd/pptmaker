@@ -1447,3 +1447,95 @@ def h_line(
         f"<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>"
         f"</p:sp>"
     )
+
+
+# ---- Picture / icon primitives ------------------------------------------
+#
+# `pic_xml` emits a generic <p:pic> shape backed by an image relationship.
+# `icon_pic` is a thin wrapper that rasterizes a Lucide SVG, registers
+# the bytes inline in the MediaRegistry, and emits the picture.
+#
+# The picture XML used to live inside figure_renderers/image_slot.py as
+# `_pic_xml` — moved here so other renderers (kpi_dashboard, swot, etc.)
+# can drop in icons without depending on the image-slot module.
+
+
+def pic_xml(
+    sp_id: int,
+    name: str,
+    rid: str,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    *,
+    src_rect: str = "",
+    alt: str = "",
+) -> str:
+    """Emit a <p:pic> shape referencing media via a relationship id.
+
+    Caller must have already registered the image (or icon) bytes in a
+    MediaRegistry on the slide and obtained ``rid``. ``src_rect`` is an
+    optional <a:srcRect .../> XML fragment for cropping (see
+    image_slot._compute_src_rect).
+    """
+    xi, yi, wi, hi = _i(x), _i(y), _i(w), _i(h)
+    descr = _xml_escape(alt) if alt else ""
+    return (
+        f"<p:pic>"
+        f'<p:nvPicPr><p:cNvPr id="{sp_id}" name="{_xml_escape(name)}" descr="{descr}"/>'
+        f'<p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>'
+        f'<p:blipFill><a:blip r:embed="{rid}"/>'
+        f"{src_rect}"
+        f"<a:stretch><a:fillRect/></a:stretch></p:blipFill>"
+        f"<p:spPr>"
+        f'<a:xfrm><a:off x="{xi}" y="{yi}"/><a:ext cx="{wi}" cy="{hi}"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f"</p:spPr>"
+        f"</p:pic>"
+    )
+
+
+def icon_pic(
+    sp_id: int,
+    icon: str,
+    media: object,
+    slide_index: int,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    *,
+    color: str = "000000",
+    shape_name: str | None = None,
+) -> str:
+    """Render a Lucide icon as a <p:pic> shape inside the slide.
+
+    Rasterizes the SVG to PNG (LRU-cached), registers the bytes in
+    ``media`` keyed by ``(icon, color)`` so the same icon used N times
+    is embedded once, and emits the picture XML.
+
+    Args:
+        sp_id: shape id to assign.
+        icon: Lucide icon name (e.g. "trending-up"); must be in
+              ICON_CATALOG. Unknown names raise ValueError.
+        media: a MediaRegistry-like object exposing ``register_inline``.
+        slide_index: 1-based slide number for media usage tracking.
+        x, y, w, h: EMU bounding box for the icon.
+        color: 6-char HEX (with or without leading '#').
+        shape_name: optional OOXML shape ``name`` attribute. Defaults
+                    to ``f"icon-{icon}"``.
+
+    Returns:
+        <p:pic> XML fragment ready to splice into the slide spTree.
+    """
+    # Local import keeps shapes.py free of cairosvg dep at import time;
+    # only render paths that actually use icons trigger the chain.
+    from .icon_renderer import asset_id_for, render_icon_png
+
+    color_clean = color.lstrip("#")
+    png = render_icon_png(icon, color_clean)
+    aid = asset_id_for(icon, color_clean)
+    rid = media.register_inline(aid, slide_index, png, mime="image/png")  # type: ignore[attr-defined]
+    sname = shape_name or f"icon-{icon}"
+    return pic_xml(sp_id, sname, rid, x, y, w, h, alt=icon)

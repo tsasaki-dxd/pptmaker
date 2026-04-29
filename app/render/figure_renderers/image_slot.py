@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, ClassVar
 
-from ..shapes import _i, _xml_escape, rect_outline, rect_shape, text_box
+from ..shapes import _i, pic_xml, rect_outline, rect_shape, text_box
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
@@ -70,29 +70,6 @@ def _compute_src_rect(
     return "", container
 
 
-def _pic_xml(
-    sp_id: int,
-    name: str,
-    rid: str,
-    box: EMUBox,
-    src_rect: str,
-    alt: str,
-) -> str:
-    x, y, w, h = _i(box.x), _i(box.y), _i(box.w), _i(box.h)
-    descr = _xml_escape(alt) if alt else ""
-    return (
-        f"<p:pic>"
-        f'<p:nvPicPr><p:cNvPr id="{sp_id}" name="{_xml_escape(name)}" descr="{descr}"/>'
-        f"<p:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>"
-        f'<p:blipFill><a:blip r:embed="{rid}"/>'
-        f"{src_rect}"
-        f"<a:stretch><a:fillRect/></a:stretch></p:blipFill>"
-        f"<p:spPr>"
-        f'<a:xfrm><a:off x="{x}" y="{y}"/><a:ext cx="{w}" cy="{h}"/></a:xfrm>'
-        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
-        f"</p:spPr>"
-        f"</p:pic>"
-    )
 
 
 @register
@@ -158,7 +135,19 @@ class ImageSlotRenderer(FigureRenderer):
 
         shapes: list[str] = []
         sid = ctx.next_shape_id
-        shapes.append(_pic_xml(sid, f"img-{asset_id[:8]}", rid, effective_box, src_rect, alt))
+        shapes.append(
+            pic_xml(
+                sid,
+                f"img-{asset_id[:8]}",
+                rid,
+                effective_box.x,
+                effective_box.y,
+                effective_box.w,
+                effective_box.h,
+                src_rect=src_rect,
+                alt=alt,
+            )
+        )
         sid += 1
 
         if caption:
