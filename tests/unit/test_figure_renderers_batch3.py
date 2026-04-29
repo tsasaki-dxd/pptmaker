@@ -48,6 +48,42 @@ def test_gantt_rejects_missing_fields() -> None:
     assert not r.validate({"tasks": [{"label": "A", "start_week": 0, "end_week": 1}]}).ok
 
 
+def test_gantt_rejects_too_many_tasks() -> None:
+    """Beyond the per-slide cap (18) the renderer fails validation
+    rather than silently truncating, so the blueprint LLM is forced
+    to split the chart across multiple slides instead of losing
+    user content."""
+    r = renderer_for("gantt")
+    too_many = {
+        "total_weeks": 12,
+        "tasks": [
+            {"label": f"Task {i}", "start_week": 0, "end_week": 2}
+            for i in range(19)
+        ],
+    }
+    result = r.validate(too_many)
+    assert not result.ok
+    assert any("exceeds max" in e for e in result.errors)
+
+
+def test_gantt_renders_at_max_cap() -> None:
+    """18 tasks should fit on one slide without crashing the layout."""
+    r = renderer_for("gantt")
+    content = {
+        "total_weeks": 14,
+        "tasks": [
+            {"label": f"タスク {i + 1}", "start_week": i // 3, "end_week": i // 3 + 2,
+             "group": f"G{i % 3}"}
+            for i in range(18)
+        ],
+        "milestones": [{"label": "Phase Gate", "week": 7}],
+    }
+    assert r.validate(content).ok
+    out = r.render(content, _box(), _ctx())
+    # 18 task labels + 18 task bars + grid bg/outline + week lines + milestone parts
+    assert len(out.shapes_xml) >= 18 * 2
+
+
 def test_gantt_renders() -> None:
     r = renderer_for("gantt")
     content = {
