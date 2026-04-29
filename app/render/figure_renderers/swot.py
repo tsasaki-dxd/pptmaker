@@ -107,8 +107,12 @@ class SwotRenderer(FigureRenderer):
                 except (ValueError, RuntimeError):
                     pass
 
-            pill_w = min(cell_w - (pill_left - x) - 160000, 520000)
-            pill_h = 260000
+            # Pill is a small badge so it stays at caption size; the
+            # body items below get the proper body scale. Width is
+            # capped so a 4-character JP title still leaves room for
+            # the icon to its left in narrow cells.
+            pill_w = min(cell_w - (pill_left - x) - 160000, 640000)
+            pill_h = 280000
             shapes.append(
                 pill_label(
                     sid,
@@ -119,7 +123,7 @@ class SwotRenderer(FigureRenderer):
                     pill_h,
                     _TITLES[key],
                     accent,
-                    size_pt=T["body"],
+                    size_pt=T["caption"],
                     font=ctx.font,
                 )
             )
