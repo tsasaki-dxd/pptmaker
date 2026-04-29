@@ -5,10 +5,15 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 from ..shapes import fit_stack, rect_outline, rect_shape, text_box
+from ..typography import TYPE_SCALE as T
 from .base import EMUBox, FigureRenderer, RenderContext, RenderOutput, ValidationResult
 from .registry import register
 
-_MAX_TASKS = 10
+# Max tasks one Gantt slide can carry while remaining legible. Beyond
+# this the blueprint LLM is instructed (via the renderer description)
+# to split the chart across multiple slides, typically by `group` or
+# project phase.
+_MAX_TASKS = 18
 
 
 @register
@@ -19,7 +24,11 @@ class GanttRenderer(FigureRenderer):
     description = (
         "Gantt chart with horizontal task bars over weeks. "
         "content: {tasks: [{label, start_week, end_week, group?}], "
-        "milestones?: [{label, week}], total_weeks}"
+        "milestones?: [{label, week}], total_weeks}. "
+        f"Hard cap: {_MAX_TASKS} tasks per slide — when content has more, "
+        "split into multiple gantt slides by phase or `group` (the "
+        "blueprint should pre-partition; the renderer rejects content "
+        "exceeding the cap rather than silently truncating)."
     )
     input_schema_example: ClassVar[dict[str, Any]] = {}
 
@@ -32,6 +41,11 @@ class GanttRenderer(FigureRenderer):
         if not isinstance(tasks, list) or not tasks:
             errors.append("tasks must be non-empty list")
         else:
+            if len(tasks) > _MAX_TASKS:
+                errors.append(
+                    f"tasks length {len(tasks)} exceeds max {_MAX_TASKS}; "
+                    "split this gantt across multiple slides by phase or group"
+                )
             for i, t in enumerate(tasks):
                 if not isinstance(t, dict):
                     errors.append(f"tasks[{i}] must be object")
@@ -97,16 +111,24 @@ class GanttRenderer(FigureRenderer):
 
         n = len(tasks)
         # row_h shrinks proportionally past natural via fit_stack so
-        # 10-task gantts don't crash into the bottom of the grid.
+        # 18-task gantts don't crash into the bottom of the grid.
+        # min_h dropped from 140000 → 95000 so the densest case still
+        # fits without squeezing labels out of legibility (95000 EMU ≈
+        # 10pt line, comfortable with bar_h auto-derived from row_h).
         row_h, row_gap = fit_stack(
             container_h=grid_h,
             n=n,
             natural_h=420000,
-            min_h=140000,
+            min_h=95000,
             gap=40000,
-            min_gap=10000,
+            min_gap=8000,
         )
-        bar_h = max(80000, min(row_h - 40000, 320000))
+        bar_h = max(60000, min(row_h - 30000, 320000))
+
+        # Auto-shrink the per-task label font when many tasks are
+        # packed in: at >12 tasks the row gets tight enough that 10pt
+        # bold no longer fits cleanly inside bar_h.
+        label_size = T["label"] if n <= 12 else T["caption"]
 
         group_palette = (p.purple, p.purple_dk, p.amber, p.green, p.purple_lt, p.muted)
         group_colors: dict[str, str] = {}
@@ -151,7 +173,7 @@ class GanttRenderer(FigureRenderer):
                         hdr_w,
                         week_hdr_h - 40000,
                         f"W{w + 1}",
-                        size_pt=9,
+                        size_pt=T["caption"],
                         bold=True,
                         color=p.muted,
                         align="ctr",
@@ -163,20 +185,25 @@ class GanttRenderer(FigureRenderer):
 
         for i, task in enumerate(tasks):
             y = grid_y + (row_h + row_gap) * i
+            # Label box gets the full row_h, not just bar_h — the bar
+            # is centered inside the row but the label sits in the
+            # left column and can use the row's full vertical space,
+            # which keeps auto_fit from shrinking JP labels into
+            # invisibility on dense (15-18 task) gantts.
             shapes.append(
                 text_box(
                     sid,
                     f"gt-lbl-{i}",
                     container.x,
-                    y + (row_h - bar_h) // 2,
+                    y,
                     label_w - 80000,
-                    bar_h,
+                    row_h,
                     task["label"],
-                    size_pt=10,
+                    size_pt=label_size,
                     bold=True,
                     color=p.black,
                     font=ctx.font,
-                    auto_fit=True,
+                    auto_fit=False,
                 )
             )
             sid += 1
@@ -192,21 +219,40 @@ class GanttRenderer(FigureRenderer):
             sid += 1
 
         # Milestones: vertical line through the grid + label in the
-        # dedicated milestone band on top. Label width = 4 weeks wide
+        # dedicated milestone band on top. Label width = 3 weeks wide
         # so JP labels like "判断ボード提出" fit; clamped at the right
-        # edge of the grid so labels near the end don't overflow.
-        ms_label_w = max(week_w * 4, 600000)
+        # edge of the grid so labels near the end don't overflow. To
+        # prevent two end-of-chart milestones (e.g. weeks 17 and 21)
+        # from both being clamped to the same right-edge x and stacking
+        # on top of each other, sort by week and shrink each label box
+        # whenever it would overlap the next one.
+        ms_label_w = max(week_w * 3, 540000)
         grid_right = grid_x + grid_w
-        for j, m in enumerate(milestones):
-            wk = max(0, min(int(m["week"]), total_weeks))
-            mx = grid_x + week_w * wk
+        ms_sorted = sorted(
+            enumerate(milestones), key=lambda im: int(im[1]["week"])
+        )
+        # Compute the milestone anchor xs first so we can clamp label
+        # widths to the gap between adjacent milestones.
+        anchors_x = [
+            grid_x + week_w * max(0, min(int(m["week"]), total_weeks))
+            for _, m in ms_sorted
+        ]
+        for k, (j, m) in enumerate(ms_sorted):
+            mx = anchors_x[k]
             shapes.append(
                 rect_shape(sid, f"gt-ms-{j}", mx - 6350, grid_y, 12700, grid_h, p.amber)
             )
             sid += 1
-            lbl_x = mx - ms_label_w // 2
-            if lbl_x + ms_label_w > grid_right:
-                lbl_x = grid_right - ms_label_w
+            # Cap label width to the distance to the next milestone so
+            # adjacent end-cluster labels don't collide; minimum width
+            # of 360000 EMU (~0.4") so very short labels still read.
+            this_label_w = ms_label_w
+            if k + 1 < len(anchors_x):
+                gap_to_next = anchors_x[k + 1] - mx
+                this_label_w = min(ms_label_w, max(360000, gap_to_next))
+            lbl_x = mx - this_label_w // 2
+            if lbl_x + this_label_w > grid_right:
+                lbl_x = grid_right - this_label_w
             if lbl_x < grid_x:
                 lbl_x = grid_x
             shapes.append(
@@ -215,10 +261,10 @@ class GanttRenderer(FigureRenderer):
                     f"gt-ms-lbl-{j}",
                     lbl_x,
                     milestone_y,
-                    ms_label_w,
+                    this_label_w,
                     milestone_hdr_h - 20000 if milestone_hdr_h else 200000,
                     str(m["label"]),
-                    size_pt=8,
+                    size_pt=T["micro"],
                     bold=True,
                     color=p.amber,
                     align="ctr",
