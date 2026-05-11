@@ -1,10 +1,15 @@
 /** Minimal API client with Cognito access token. */
 
+import { getValidAccessToken } from './auth';
 import { getConfig } from './config';
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const { apiEndpoint } = await getConfig();
-  const token = typeof window !== 'undefined' ? window.localStorage.getItem('slideforge.accessToken') : null;
+  // Pulls a token that's guaranteed-valid right now; the auth helper
+  // transparently uses the refresh token to swap an expired access
+  // token for a fresh one, so 1-hour JWT expiry never bubbles up as a
+  // 401 mid-session anymore.
+  const token = typeof window !== 'undefined' ? await getValidAccessToken() : null;
   const isBodyJson = init.body && typeof init.body === 'string';
   const res = await fetch(`${apiEndpoint}${path}`, {
     ...init,
@@ -14,6 +19,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       ...init.headers,
     },
   });
+  if (res.status === 401 && typeof window !== 'undefined') {
+    // Refresh token has expired (or some other auth lapse). The token
+    // helper has already cleared local cache as a side effect of its
+    // failed refresh, so route to login instead of throwing into the
+    // UI as a generic "401 ..." string.
+    window.location.assign('/login');
+    // Bail with a typed error so the caller's catch path still runs
+    // (and the redirect kicks in before any chained Promise resolves).
+    throw new Error('401 unauthorized — redirecting to login');
+  }
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
   return (await res.json()) as T;
 }
