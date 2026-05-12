@@ -20,6 +20,15 @@ class Settings:
     render_queue_url: str
     cognito_user_pool_id: str
     cognito_client_id: str
+    # Optional second client id accepted on inbound tokens (Cognito
+    # client_credentials grant for external integrations). Empty string
+    # disables the M2M path — `verify_token` then only accepts the web
+    # client id.
+    cognito_m2m_client_id: str
+    # Required OAuth 2.0 scope on M2M tokens hitting /api/v1/external/*.
+    # Defaults to the production scope; empty string disables the check
+    # (useful in local dev).
+    external_api_required_scope: str
     claude_model_blueprint: str
     claude_model_revision: str
     claude_model_brush: str
@@ -89,6 +98,10 @@ def get_settings() -> Settings:
         render_queue_url=os.environ.get("RENDER_QUEUE_URL", ""),
         cognito_user_pool_id=os.environ.get("COGNITO_USER_POOL_ID", ""),
         cognito_client_id=os.environ.get("COGNITO_CLIENT_ID", ""),
+        cognito_m2m_client_id=os.environ.get("COGNITO_M2M_CLIENT_ID", ""),
+        external_api_required_scope=os.environ.get(
+            "EXTERNAL_API_REQUIRED_SCOPE", "slideforge-api/slides:create"
+        ),
         claude_model_blueprint=os.environ.get("CLAUDE_MODEL_BLUEPRINT", "claude-sonnet-4-6"),
         claude_model_revision=os.environ.get("CLAUDE_MODEL_REVISION", "claude-sonnet-4-6"),
         claude_model_brush=os.environ.get("CLAUDE_MODEL_BRUSH", "claude-haiku-4-5-20251001"),
