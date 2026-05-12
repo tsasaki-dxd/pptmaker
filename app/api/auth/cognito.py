@@ -48,7 +48,15 @@ def _jwks() -> dict[str, Any]:
 def verify_token(token: str) -> dict[str, Any]:
     s = get_settings()
     if s.env == "local":
-        return {"sub": "local-user", "tenant_id": "local-tenant", "cognito:groups": ["admin"]}
+        # ENV=local bypass — return claims that satisfy every downstream
+        # check, including the external API's scope requirement, so tests
+        # can hit any endpoint without minting a real JWT.
+        return {
+            "sub": "local-user",
+            "tenant_id": "local-tenant",
+            "cognito:groups": ["admin"],
+            "scope": s.external_api_required_scope or "slideforge-api/slides:create",
+        }
 
     from jose import jwt  # local import keeps unit tests lightweight
 
@@ -81,7 +89,16 @@ def verify_token(token: str) -> dict[str, Any]:
 
     if s.cognito_client_id:
         token_client = claims.get("client_id") or claims.get("aud")
-        if token_client != s.cognito_client_id:
+        # Accept either the web user-pool client or the M2M
+        # client_credentials client. The two share the same user pool
+        # (same JWKS / issuer) but identify different callers — the
+        # external router additionally requires the `slides:create`
+        # scope, so unprivileged M2M tokens still can't reach user-only
+        # endpoints (they have no Cognito-default user scope).
+        allowed_clients = {s.cognito_client_id}
+        if s.cognito_m2m_client_id:
+            allowed_clients.add(s.cognito_m2m_client_id)
+        if token_client not in allowed_clients:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "client_id mismatch")
 
     return claims
@@ -117,11 +134,50 @@ def current_user_id(user: dict[str, Any] = Depends(current_user)) -> str:
     Used by the projects router to filter the project list per user.
     Unlike `email`, `sub` never changes, so existing rows survive an
     email-address change.
+
+    Cognito client_credentials access tokens carry a `sub` claim that
+    equals `client_id`, so external integrations land in this branch
+    naturally and projects they create get owned by the calling client.
+    Falling back to `client_id` covers the edge case where `sub` is
+    missing (some non-Cognito JWTs).
     """
-    sub = user.get("sub")
+    sub = user.get("sub") or user.get("client_id")
     if not sub:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "no user id in token")
     return sub
+
+
+def require_scope(required_scope: str):
+    """Build a FastAPI dependency that rejects tokens missing `required_scope`.
+
+    Cognito access tokens (both user and client_credentials) carry a
+    space-separated `scope` claim, e.g.
+    "slideforge-api/slides:create aws.cognito.signin.user.admin". Used
+    to gate the external integration router so only callers whose M2M
+    client was issued the `slides:create` scope can create projects via
+    POST /api/v1/external/slides.
+
+    Skipped entirely when the required_scope setting is empty (local
+    dev / pytest with the scope check turned off).
+    """
+
+    def _dep(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:
+        if not required_scope:
+            return user
+        scope_claim = user.get("scope") or ""
+        # Cognito serializes scopes space-separated. ID tokens don't
+        # carry `scope` — only access tokens do — so a caller using an
+        # ID token will be rejected here, which is the desired behavior
+        # for an API meant for service-to-service traffic.
+        scopes = scope_claim.split() if isinstance(scope_claim, str) else list(scope_claim)
+        if required_scope not in scopes:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                f"missing required scope: {required_scope}",
+            )
+        return user
+
+    return _dep
 
 
 def require_admin(user: dict[str, Any] = Depends(current_user)) -> dict[str, Any]:

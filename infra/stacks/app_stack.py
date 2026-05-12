@@ -300,6 +300,90 @@ class AppStack(cdk.Stack):
             prevent_user_existence_errors=True,
         )
 
+        # ---- Machine-to-machine auth for external integrations ----
+        #
+        # External services (e.g. report_bot on Cloud Run) call
+        # /api/v1/external/slides using the OAuth 2.0 client_credentials
+        # grant. That requires:
+        #   1. A resource server with a custom scope. The access token's
+        #      `scope` claim then carries "<resource_server_id>/<scope>".
+        #   2. A user pool domain so the token endpoint
+        #      (https://<domain>/oauth2/token) is reachable.
+        #   3. An app client with generate_secret=True and the
+        #      client_credentials flow enabled.
+        self.api_resource_server = self.user_pool.add_resource_server(
+            "ApiResourceServer",
+            identifier="slideforge-api",
+            scopes=[
+                cognito.ResourceServerScope(
+                    scope_name="slides:create",
+                    scope_description="Create slides via the external integration API",
+                ),
+            ],
+        )
+        slides_create_scope = cognito.OAuthScope.resource_server(
+            self.api_resource_server,
+            cognito.ResourceServerScope(
+                scope_name="slides:create",
+                scope_description="Create slides via the external integration API",
+            ),
+        )
+        self.m2m_client = self.user_pool.add_client(
+            "M2MClient",
+            user_pool_client_name=f"slideforge-{stage_name}-m2m",
+            generate_secret=True,
+            o_auth=cognito.OAuthSettings(
+                flows=cognito.OAuthFlows(
+                    authorization_code_grant=False,
+                    implicit_code_grant=False,
+                    client_credentials=True,
+                ),
+                scopes=[slides_create_scope],
+            ),
+            # client_credentials tokens never represent a human, so the
+            # standard user-existence-error toggle is irrelevant.
+            prevent_user_existence_errors=True,
+        )
+        # Token endpoint lives at https://<prefix>.auth.<region>.amazoncognito.com.
+        # Prefix must be globally unique within the region; account id
+        # keeps it stable across re-deploys without colliding with
+        # other tenants.
+        self.user_pool_domain = self.user_pool.add_domain(
+            "UserPoolDomain",
+            cognito_domain=cognito.CognitoDomainOptions(
+                domain_prefix=f"slideforge-{stage_name}-{self.account}",
+            ),
+        )
+        # Stash the M2M client_secret in Secrets Manager so the consumer
+        # (Cloud Run / report_bot) can fetch it via a stable ARN instead
+        # of running `aws cognito-idp describe-user-pool-client` by hand.
+        # SecretsManager doesn't enforce JSON, but storing as JSON makes
+        # it easy to consume with the standard
+        # SecretsManager.get_secret_value -> json.loads pattern.
+        self.m2m_credentials_secret = sm.Secret(
+            self,
+            "M2MCredentials",
+            secret_name=f"slideforge/{stage_name}/m2m-credentials",
+            description=(
+                "Cognito client_credentials grant: client_id + client_secret "
+                "for external services calling /api/v1/external/slides"
+            ),
+            encryption_key=self.key,
+            secret_object_value={
+                "client_id": cdk.SecretValue.unsafe_plain_text(
+                    self.m2m_client.user_pool_client_id
+                ),
+                "client_secret": self.m2m_client.user_pool_client_secret,
+                "token_url": cdk.SecretValue.unsafe_plain_text(
+                    f"https://slideforge-{stage_name}-{self.account}"
+                    f".auth.{self.region}.amazoncognito.com/oauth2/token"
+                ),
+                "scope": cdk.SecretValue.unsafe_plain_text(
+                    "slideforge-api/slides:create"
+                ),
+            },
+        )
+
         render_dlq = sqs.Queue(
             self,
             "RenderDlq",
@@ -480,6 +564,13 @@ class AppStack(cdk.Stack):
                 "FF_HEADLINE_REQUIRED": "1",
                 "COGNITO_USER_POOL_ID": self.user_pool.user_pool_id,
                 "COGNITO_CLIENT_ID": self.user_pool_client.user_pool_client_id,
+                # The M2M client id is accepted as an alternative `client_id`
+                # claim by app/api/auth/cognito.py — that's how the API
+                # tells a user request apart from a client_credentials call
+                # from an external service. Required scope is enforced in
+                # the external router, not here.
+                "COGNITO_M2M_CLIENT_ID": self.m2m_client.user_pool_client_id,
+                "EXTERNAL_API_REQUIRED_SCOPE": "slideforge-api/slides:create",
                 "ANTHROPIC_API_KEY_SECRET": anthropic_secret.secret_name,
             },
         )
@@ -830,6 +921,31 @@ function handler(event) {
         cdk.CfnOutput(self, "ApiEndpoint", value=self.http_api.api_endpoint)
         cdk.CfnOutput(self, "UserPoolId", value=self.user_pool.user_pool_id)
         cdk.CfnOutput(self, "UserPoolClientId", value=self.user_pool_client.user_pool_client_id)
+        cdk.CfnOutput(
+            self,
+            "M2MClientId",
+            value=self.m2m_client.user_pool_client_id,
+            description="Cognito app client id for the external integration API.",
+        )
+        cdk.CfnOutput(
+            self,
+            "M2MCredentialsSecretArn",
+            value=self.m2m_credentials_secret.secret_arn,
+            description=(
+                "Secrets Manager secret containing client_id / client_secret / "
+                "token_url / scope for client_credentials access to "
+                "/api/v1/external/slides."
+            ),
+        )
+        cdk.CfnOutput(
+            self,
+            "CognitoTokenUrl",
+            value=(
+                f"https://slideforge-{stage_name}-{self.account}"
+                f".auth.{self.region}.amazoncognito.com/oauth2/token"
+            ),
+            description="OAuth 2.0 token endpoint for the client_credentials grant.",
+        )
         cdk.CfnOutput(self, "ArtifactsBucketName", value=self.artifacts_bucket.bucket_name)
         cdk.CfnOutput(self, "RenderQueueUrl", value=self.render_queue.queue_url)
         cdk.CfnOutput(self, "WebBucketName", value=self.web_bucket.bucket_name)

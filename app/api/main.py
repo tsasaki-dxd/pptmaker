@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from mangum import Mangum
 
 from .config import get_settings
-from .routers import images, projects, templates
+from .routers import external, images, projects, templates
 
 logging.basicConfig(
     level=get_settings().log_level,
@@ -27,6 +27,7 @@ app = FastAPI(title="SlideForge API", version="0.1.0")
 app.include_router(templates.router)
 app.include_router(projects.router)
 app.include_router(images.router)
+app.include_router(external.router)
 
 
 # Schema creation happens lazily inside db.get_session() on the first

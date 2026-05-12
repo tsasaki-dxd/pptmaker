@@ -74,6 +74,95 @@ make synth
 **`docs/bootstrap.md`** を上から順に実行してください。所要 1〜2 時間。
 最後の `make deploy-pipeline` 実行後、main への PR merge で自動的に Prod へデプロイされます（Phase 1 は単一ステージ、Stg は Phase 2 で新設）。
 
+## 外部サービスからの呼び出し方（External Integration API）
+
+`report_bot` のような外部サービス（Cloud Run / Cloud Functions など）から、Cognito の **client_credentials grant** を使って `POST /api/v1/external/slides` を叩くと、マークダウンを渡すだけで一発でスライドが生成できます。Web UI のステップ毎呼び出し（project → blueprint → render → export）をサーバ側で完結させたエンドポイントです。
+
+### エンドポイント
+
+```
+POST <ApiEndpoint>/api/v1/external/slides
+Authorization: Bearer <Cognito access token (scope: slideforge-api/slides:create)>
+Content-Type: application/json
+
+{
+  "title": "週次レポート要約",
+  "template_id": "DXDesignSystem",
+  "report_markdown": "## 今週の出来事\n- ...",
+  "source_url": "https://example.com/weekly/2026-05",
+  "wait": true,
+  "timeout_sec": 180
+}
+```
+
+レスポンス：
+
+```json
+{
+  "project_id": "9f...",
+  "status": "done",
+  "pptx_url": "https://...presigned...",
+  "pdf_url":  "https://...presigned...",
+  "preview_urls": ["https://...slide-01.jpg...", "..."]
+}
+```
+
+`wait=false` の場合は blueprint 生成のみ行い `status: "pending"` で即時返却。失敗時は HTTP 5xx ではなく `status: "error"` と `error` フィールドで返るので、呼び出し側は分岐しやすいです。
+
+### 1) 認証情報の取得
+
+CDK デプロイ後、`App-prod` スタックの CloudFormation Outputs に以下が出力されます：
+
+- `M2MClientId` — Cognito app client id
+- `M2MCredentialsSecretArn` — Secrets Manager の secret ARN（`client_id` / `client_secret` / `token_url` / `scope` を JSON で保持）
+- `CognitoTokenUrl` — OAuth 2.0 トークンエンドポイント
+
+呼び出し側（report_bot 等）は **Secrets Manager の secret ARN を Cloud Run 等のシークレットマウントに渡す** だけで認証情報を取り出せます。手元から確認するなら：
+
+```bash
+aws secretsmanager get-secret-value \
+  --secret-id slideforge/prod/m2m-credentials \
+  --query SecretString --output text
+```
+
+### 2) アクセストークン取得 → スライド生成 (curl サンプル)
+
+```bash
+# 認証情報をシェルに展開
+eval "$(aws secretsmanager get-secret-value \
+  --secret-id slideforge/prod/m2m-credentials \
+  --query SecretString --output text \
+  | jq -r '. as $s | "CLIENT_ID=\($s.client_id)\nCLIENT_SECRET=\($s.client_secret)\nTOKEN_URL=\($s.token_url)\nSCOPE=\($s.scope)"')"
+
+# アクセストークン取得（5分間有効）
+ACCESS_TOKEN=$(curl -s -X POST "$TOKEN_URL" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -u "$CLIENT_ID:$CLIENT_SECRET" \
+  -d "grant_type=client_credentials&scope=$SCOPE" \
+  | jq -r .access_token)
+
+# スライド生成
+curl -s -X POST "$API_ENDPOINT/api/v1/external/slides" \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "title": "週次レポート要約",
+        "template_id": "DXDesignSystem",
+        "report_markdown": "## 今週の出来事\n- A\n- B\n- C",
+        "wait": true
+      }' \
+  | jq
+```
+
+`API_ENDPOINT` は `App-prod` の `ApiEndpoint` 出力（または独自ドメイン）を利用してください。
+
+### 3) 動作仕様メモ
+
+- `template_id` は UUID 文字列でもテンプレートの **表示名** でも受け付けます（同名が複数あれば最新を選択）。報告 bot 側はテンプレート差し替え時もコード変更不要。
+- 認証ミドルウェアは Web ユーザ用トークンと M2M トークンの両方を同じ user pool（同じ JWKS）で検証します。M2M トークンでも `/api/projects` 等の Web 用エンドポイントには `slides:create` scope だけでは到達できないので、外部サービスは `/api/v1/external/*` のみ叩く設計です。
+- プロジェクトは呼び出し元 client_id を `owner_user_id` として記録します。Web UI の「自分のプロジェクト」リストには現れませんが、CloudWatch / DB から追跡可能です。
+- `Idempotency-Key` ヘッダは Phase 1 では受理して無視（後方互換のためのフックのみ用意）。Phase 2 で重複排除を入れます。
+
 ---
 
 # PoC 資産（参考）
