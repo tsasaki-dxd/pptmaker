@@ -26,6 +26,8 @@ from .models.db import (
 )
 from .services.blueprint_builder import BlueprintBuildError, build_blueprint
 from .services.llm import LLMClient
+from .services.queue import RenderQueue
+from .services.storage import Storage
 from .services.template_analyzer import analyze_template
 
 log = logging.getLogger("slideforge.blueprint_worker")
@@ -151,6 +153,18 @@ def _process(msg: dict[str, Any]) -> None:
         job.blueprint_id = bp_id
         db.commit()
         log.info("job %s complete -> blueprint %s v%d", job_id, bp_id, next_version)
+
+        # External integration API path: when the SQS message was
+        # enqueued with auto_render=True (POST /api/v1/external/slides),
+        # immediately fire the render job and flip the project to
+        # status="rendering" so the polling GET can distinguish
+        # "blueprint just landed" from "render in progress".
+        #
+        # Web UI doesn't set this flag — the user explicitly clicks
+        # "render" after reviewing the blueprint, which is the existing
+        # POST /api/projects/{id}/render path.
+        if msg.get("auto_render"):
+            _submit_render(db, bp, project, template)
     except Exception:
         # Transient (DB, Secrets Manager, Anthropic transport). Roll back
         # and re-raise so SQS retries up to the DLQ threshold.
@@ -166,6 +180,47 @@ def _mark_failed(db: Any, job: BlueprintJobRow, error: str) -> None:
     job.error_message = error[:2000]
     db.commit()
     log.error("job %s failed: %s", job.id, error)
+
+
+def _submit_render(
+    db: Any,
+    bp: BlueprintRow,
+    project: ProjectRow,
+    template: TemplateProfileRow,
+) -> None:
+    """Enqueue a render job and mark the project as rendering.
+
+    Mirrors the payload built by app/api/routers/projects.py:render so
+    the render Lambda gets the same shape regardless of who triggered
+    it. Kept inside the worker (rather than imported from the router)
+    so the worker stays a self-contained Lambda entry point.
+    """
+    storage = Storage()
+    out_prefix = storage.output_prefix(project.tenant_id, project.id, bp.version)
+    try:
+        RenderQueue().submit(
+            {
+                "job_id": str(uuid4()),
+                "tenant_id": project.tenant_id,
+                "project_id": project.id,
+                "template_s3": template.original_s3_path,
+                "blueprint": {"title": bp.title, "slides": bp.slides},
+                "template_layouts": list(template.layouts or []),
+                "design_tokens": dict(template.design_tokens or {}),
+                "out_prefix": storage.as_uri(out_prefix),
+            }
+        )
+    except Exception:
+        # The blueprint itself succeeded, so we don't want a transient
+        # SQS failure to mark the whole job failed (which would hide
+        # the blueprint from a retry). Log + leave status="rendering"
+        # untouched — the polling client will see "rendering" and the
+        # operator can re-fire /api/projects/{id}/render manually.
+        log.exception("auto-render submit failed for project %s", project.id)
+        return
+    project.status = "rendering"
+    db.commit()
+    log.info("auto-render submitted project=%s blueprint=%s", project.id, bp.id)
 
 
 def _describe_layouts(layouts: list[dict]) -> str:

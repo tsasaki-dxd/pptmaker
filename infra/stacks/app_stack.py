@@ -594,6 +594,12 @@ class AppStack(cdk.Stack):
         self.db_secret.grant_read(blueprint_worker_role)
         anthropic_secret.grant_read(blueprint_worker_role)
         self.blueprint_queue.grant_consume_messages(blueprint_worker_role)
+        # External-API path: after the worker writes the blueprint, it
+        # auto-enqueues the render job (msg.auto_render=True). Without
+        # this grant the send_message call would 403 and the project
+        # would sit in status="rendering" forever from the polling
+        # client's perspective.
+        self.render_queue.grant_send_messages(blueprint_worker_role)
 
         self.blueprint_worker_function = lambda_.Function(
             self,
@@ -630,6 +636,11 @@ class AppStack(cdk.Stack):
                 "S3_BUCKET": self.artifacts_bucket.bucket_name,
                 "DB_SECRET_ARN": self.db_secret.secret_arn,
                 "DB_ENDPOINT": self.db.instance_endpoint.hostname,
+                # Used when the SQS message carries auto_render=True
+                # (external integration API). Same queue the HTTP /render
+                # endpoint feeds, so the downstream render Lambda doesn't
+                # have to care who enqueued the job.
+                "RENDER_QUEUE_URL": self.render_queue.queue_url,
                 # Cognito not needed — worker is invoked by SQS, never
                 # handles a user token directly.
                 "ANTHROPIC_API_KEY_SECRET": anthropic_secret.secret_name,

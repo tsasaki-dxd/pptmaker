@@ -76,92 +76,138 @@ make synth
 
 ## 外部サービスからの呼び出し方（External Integration API）
 
-`report_bot` のような外部サービス（Cloud Run / Cloud Functions など）から、Cognito の **client_credentials grant** を使って `POST /api/v1/external/slides` を叩くと、マークダウンを渡すだけで一発でスライドが生成できます。Web UI のステップ毎呼び出し（project → blueprint → render → export）をサーバ側で完結させたエンドポイントです。
+`report_bot` のような外部サービス（Cloud Run / Cloud Functions 等）が、Cognito の **client_credentials grant** を使って 2 本のエンドポイントを叩いてスライドを生成します。Web UI のステップ毎の呼び出し（project → blueprint → render → export）を **非同期 submit + polling** に圧縮した形です。
+
+API Gateway HTTP API の 30 秒タイムアウトを超える blueprint LLM 呼び出し + render が中で走るので、同期版（旧 `wait=true`）は廃止し、polling 設計に移行しました。
 
 ### エンドポイント
 
 ```
-POST <ApiEndpoint>/api/v1/external/slides
-Authorization: Bearer <Cognito access token (scope: slideforge-api/slides:create)>
-Content-Type: application/json
+POST <ApiEndpoint>/api/v1/external/slides             → 202 (submit)
+GET  <ApiEndpoint>/api/v1/external/slides/{project_id} → 200 (poll)
+```
 
+両方とも `Authorization: Bearer <Cognito access token, scope=slideforge-api/slides:create>` 必須。エラーは HTTP 5xx ではなく **常に 200/202 + `status: "error"`** で返します（report_bot 側で HTTP コードとアプリエラーを混ぜずに済むよう統一）。
+
+#### リクエスト/レスポンス スキーマ
+
+```python
+# POST body
 {
   "title": "週次レポート要約",
-  "template_id": "DXDesignSystem",
+  "template_id": "DXDesignSystem",     # UUID または display name
   "report_markdown": "## 今週の出来事\n- ...",
-  "source_url": "https://example.com/weekly/2026-05",
-  "wait": true,
-  "timeout_sec": 180
+  "source_url": "https://example.com/weekly/2026-05"  # optional, LLM への補助コンテキスト
 }
-```
 
-レスポンス：
-
-```json
+# POST/GET response (両方で同じ shape)
 {
   "project_id": "9f...",
-  "status": "done",
-  "pptx_url": "https://...presigned...",
-  "pdf_url":  "https://...presigned...",
-  "preview_urls": ["https://...slide-01.jpg...", "..."]
+  "status": "queued" | "rendering" | "done" | "error",
+  "pptx_url":     null | "https://...presigned (24h)",
+  "pdf_url":      null | "https://...presigned (24h)",
+  "preview_urls": null | ["https://...slide-01.jpg", ...],
+  "error":        null | "..."
 }
 ```
 
-`wait=false` の場合は blueprint 生成のみ行い `status: "pending"` で即時返却。失敗時は HTTP 5xx ではなく `status: "error"` と `error` フィールドで返るので、呼び出し側は分岐しやすいです。
+### ステータス遷移
+
+| status | 条件 | 次に取る行動 |
+|---|---|---|
+| `queued` | POST 直後 / blueprint worker 処理待ち（BlueprintJob.status=pending） | 3〜5 秒間隔で GET をリトライ |
+| `rendering` | blueprint 完了済、render Lambda 実行中（project.status=rendering） | 同上 |
+| `done` | render 完了（project.status=complete または partial） | `pptx_url` / `pdf_url` / `preview_urls` を取得 |
+| `error` | blueprint 失敗 / render 失敗 / project 未発見 / テンプレート未発見 | `error` フィールドのメッセージを参照、再試行可否判断 |
+
+```
+                 POST /slides
+                      │
+                      ▼
+                  ┌────────┐
+                  │ queued │◄──── BlueprintJob.status=pending
+                  └────┬───┘
+       blueprint_worker│完了 + render SQS enqueue
+                      ▼
+                ┌──────────┐
+                │ rendering│◄──── project.status=rendering
+                └────┬─────┘
+       render Lambda │完了
+            ┌────────┴──────────┐
+   complete │                   │ failed
+            ▼                   ▼
+        ┌──────┐            ┌──────┐
+        │ done │            │ error│
+        └──────┘            └──────┘
+```
+
+想定 polling: report_bot 側で **3〜5 秒間隔、最大 180 秒** で `done` / `error` を待つ。
 
 ### 1) 認証情報の取得
 
-CDK デプロイ後、`App-prod` スタックの CloudFormation Outputs に以下が出力されます：
+CDK デプロイ後、`App-prod` スタックの CloudFormation Outputs:
 
 - `M2MClientId` — Cognito app client id
-- `M2MCredentialsSecretArn` — Secrets Manager の secret ARN（`client_id` / `client_secret` / `token_url` / `scope` を JSON で保持）
-- `CognitoTokenUrl` — OAuth 2.0 トークンエンドポイント
+- `M2MCredentialsSecretArn` — Secrets Manager secret ARN（`client_id` / `client_secret` / `token_url` / `scope` を JSON で保持）
+- `CognitoTokenUrl` — OAuth 2.0 token endpoint
+- `ApiEndpoint` — `/api/v1/external/slides` をマウントしている API Gateway の URL（同一）
 
-呼び出し側（report_bot 等）は **Secrets Manager の secret ARN を Cloud Run 等のシークレットマウントに渡す** だけで認証情報を取り出せます。手元から確認するなら：
+Cloud Run 側は Secrets Manager の secret を取得するか、GCP Secret Manager にコピーしてマウントしてください。手元から確認するだけなら:
 
 ```bash
 aws secretsmanager get-secret-value \
   --secret-id slideforge/prod/m2m-credentials \
-  --query SecretString --output text
+  --query SecretString --output text | jq
 ```
 
-### 2) アクセストークン取得 → スライド生成 (curl サンプル)
+### 2) curl サンプル
 
 ```bash
-# 認証情報をシェルに展開
+# (a) 認証情報をシェルに展開
 eval "$(aws secretsmanager get-secret-value \
   --secret-id slideforge/prod/m2m-credentials \
   --query SecretString --output text \
   | jq -r '. as $s | "CLIENT_ID=\($s.client_id)\nCLIENT_SECRET=\($s.client_secret)\nTOKEN_URL=\($s.token_url)\nSCOPE=\($s.scope)"')"
 
-# アクセストークン取得（5分間有効）
+# (b) アクセストークン取得（既定で 1 時間有効）
 ACCESS_TOKEN=$(curl -s -X POST "$TOKEN_URL" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -u "$CLIENT_ID:$CLIENT_SECRET" \
   -d "grant_type=client_credentials&scope=$SCOPE" \
   | jq -r .access_token)
 
-# スライド生成
-curl -s -X POST "$API_ENDPOINT/api/v1/external/slides" \
+# (c) スライド生成を submit (202 + status=queued + project_id を受け取る)
+PROJECT_ID=$(curl -s -X POST "$API_ENDPOINT/api/v1/external/slides" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
         "title": "週次レポート要約",
         "template_id": "DXDesignSystem",
-        "report_markdown": "## 今週の出来事\n- A\n- B\n- C",
-        "wait": true
+        "report_markdown": "## 今週の出来事\n- A\n- B\n- C"
       }' \
-  | jq
-```
+  | jq -r .project_id)
 
-`API_ENDPOINT` は `App-prod` の `ApiEndpoint` 出力（または独自ドメイン）を利用してください。
+# (d) 完了まで polling
+for i in $(seq 1 60); do
+  RESULT=$(curl -s -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "$API_ENDPOINT/api/v1/external/slides/$PROJECT_ID")
+  STATUS=$(echo "$RESULT" | jq -r .status)
+  echo "poll $i: $STATUS"
+  case "$STATUS" in
+    done)  echo "$RESULT" | jq; break ;;
+    error) echo "$RESULT" | jq; exit 1 ;;
+  esac
+  sleep 3
+done
+```
 
 ### 3) 動作仕様メモ
 
-- `template_id` は UUID 文字列でもテンプレートの **表示名** でも受け付けます（同名が複数あれば最新を選択）。報告 bot 側はテンプレート差し替え時もコード変更不要。
-- 認証ミドルウェアは Web ユーザ用トークンと M2M トークンの両方を同じ user pool（同じ JWKS）で検証します。M2M トークンでも `/api/projects` 等の Web 用エンドポイントには `slides:create` scope だけでは到達できないので、外部サービスは `/api/v1/external/*` のみ叩く設計です。
-- プロジェクトは呼び出し元 client_id を `owner_user_id` として記録します。Web UI の「自分のプロジェクト」リストには現れませんが、CloudWatch / DB から追跡可能です。
-- `Idempotency-Key` ヘッダは Phase 1 では受理して無視（後方互換のためのフックのみ用意）。Phase 2 で重複排除を入れます。
+- `template_id` は UUID でも表示名でも可。同名が複数あれば最新を優先。
+- 認証は Web ユーザトークンと M2M トークン両方を同じ user pool / JWKS で検証。M2M トークンの `slides:create` scope では Web 用エンドポイントは叩けないので、外部サービスは `/api/v1/external/*` のみ利用してください。
+- 作成プロジェクトの `owner_user_id` は呼び出し元 client_id。Web UI の「自分のプロジェクト」には現れません。
+- `Idempotency-Key` ヘッダは Phase 1 では受理して無視（夢の Phase 2 で本物の dedupe を実装する用のフック）。
+- presigned URL の有効期限は 24 時間。`done` を観測した後は何度 GET しても毎回新しい URL が返るので、Chat 投稿のリトライにも対応できます。
 
 ---
 
