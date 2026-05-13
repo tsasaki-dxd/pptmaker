@@ -126,7 +126,7 @@ def _blueprint_messages() -> list[dict]:
     return [m for m in _FAKE_SQS.messages if "blueprint-test" in m["QueueUrl"]]
 
 
-def _create_template(client: TestClient, name: str = "DXDesignSystem") -> str:
+def _create_template(client: TestClient, name: str = "DXデザインシステム株式会社") -> str:
     r = client.post("/api/templates", params={"name": name})
     assert r.status_code == 200, r.text
     return r.json()["template_id"]
@@ -155,7 +155,7 @@ def test_post_returns_202_and_queues_blueprint(client: TestClient) -> None:
         "/api/v1/external/slides",
         json={
             "title": "週次レポート要約",
-            "template_id": "DXDesignSystem",
+            "template_id": "DXデザインシステム株式会社",
             "report_markdown": "## summary\n- a",
         },
     )
@@ -184,7 +184,7 @@ def test_get_returns_queued_before_worker_runs(client: TestClient) -> None:
     _create_template(client)
     r = client.post(
         "/api/v1/external/slides",
-        json={"title": "t", "template_id": "DXDesignSystem", "report_markdown": "x"},
+        json={"title": "t", "template_id": "DXデザインシステム株式会社", "report_markdown": "x"},
     )
     project_id = r.json()["project_id"]
 
@@ -197,7 +197,7 @@ def test_worker_chains_render_and_flips_to_rendering(client: TestClient) -> None
     _create_template(client)
     r = client.post(
         "/api/v1/external/slides",
-        json={"title": "t", "template_id": "DXDesignSystem", "report_markdown": "x"},
+        json={"title": "t", "template_id": "DXデザインシステム株式会社", "report_markdown": "x"},
     )
     project_id = r.json()["project_id"]
 
@@ -222,7 +222,7 @@ def test_get_returns_done_with_urls_when_render_completes(client: TestClient) ->
     _create_template(client)
     r = client.post(
         "/api/v1/external/slides",
-        json={"title": "t", "template_id": "DXDesignSystem", "report_markdown": "x"},
+        json={"title": "t", "template_id": "DXデザインシステム株式会社", "report_markdown": "x"},
     )
     project_id = r.json()["project_id"]
 
@@ -254,7 +254,7 @@ def test_get_returns_error_when_render_fails(client: TestClient) -> None:
     _create_template(client)
     r = client.post(
         "/api/v1/external/slides",
-        json={"title": "t", "template_id": "DXDesignSystem", "report_markdown": "x"},
+        json={"title": "t", "template_id": "DXデザインシステム株式会社", "report_markdown": "x"},
     )
     project_id = r.json()["project_id"]
 
@@ -280,7 +280,7 @@ def test_get_returns_error_when_blueprint_fails(client: TestClient) -> None:
     _create_template(client)
     r = client.post(
         "/api/v1/external/slides",
-        json={"title": "t", "template_id": "DXDesignSystem", "report_markdown": "x"},
+        json={"title": "t", "template_id": "DXデザインシステム株式会社", "report_markdown": "x"},
     )
     project_id = r.json()["project_id"]
 
@@ -337,6 +337,34 @@ def test_post_unknown_template_returns_error_synchronously(client: TestClient) -
     assert _blueprint_messages() == []
 
 
+def test_post_template_lookup_is_case_sensitive(client: TestClient) -> None:
+    """Regression guard: case-insensitive ilike fallback was removed.
+
+    The previous implementation would silently fall back to ilike when
+    the exact-name lookup missed. That bit us once: report_bot sent
+    "DXデザイン会計事務所" against a deployment that also had a sister
+    template registered, and the ilike fallback resolved to the wrong
+    row. Body palette came out cyan even though the chrome was purple.
+
+    Lookup now requires an exact match, so a casing mismatch returns
+    a clean status=error instead of silently rendering against
+    whichever row happened to ilike-match.
+    """
+    _create_template(client, name="DXデザインシステム株式会社")
+    r = client.post(
+        "/api/v1/external/slides",
+        json={
+            "title": "t",
+            # Same letters, different case — ilike used to match this.
+            "template_id": "dxデザインシステム株式会社",
+            "report_markdown": "x",
+        },
+    )
+    assert r.status_code == 202
+    assert r.json()["status"] == "error"
+    assert "template not found" in r.json()["error"]
+
+
 def test_post_template_by_uuid(client: TestClient) -> None:
     template_id = _create_template(client, name="OtherTemplate")
     r = client.post(
@@ -358,7 +386,7 @@ def test_idempotency_key_header_accepted(client: TestClient) -> None:
         "/api/v1/external/slides",
         json={
             "title": "idem",
-            "template_id": "DXDesignSystem",
+            "template_id": "DXデザインシステム株式会社",
             "report_markdown": "x",
         },
         headers={"Idempotency-Key": "abc-123"},

@@ -58,11 +58,17 @@ ExternalStatus = Literal["queued", "blueprint", "rendering", "done", "error"]
 
 class ExternalSlideRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
-    # Accepts the template UUID or its display name (exact match, then
-    # case-insensitive fallback, newest-wins on duplicates). report_bot
-    # ships with the production template name so it stays agnostic of
-    # the underlying UUID across re-uploads.
-    template_id: str = Field(default="DXDesignSystem", min_length=1)
+    # Accepts the template UUID or its display name (exact match,
+    # case-sensitive, newest-wins on duplicates). report_bot ships with
+    # the production template name so it stays agnostic of the
+    # underlying UUID across re-uploads.
+    #
+    # Default is the canonical production template — keeping it
+    # synchronized with the actual `template_profiles.name` is
+    # important: a default that doesn't exist would fall through to
+    # `status: "error"` on every external POST and we'd only notice
+    # via the caller's monitoring.
+    template_id: str = Field(default="DXデザインシステム株式会社", min_length=1)
     report_markdown: str = Field(min_length=1)
     source_url: str | None = None
 
@@ -296,13 +302,21 @@ def _attach_download_urls(
 def _resolve_template(
     db: Session, raw: str, tenant_id: str
 ) -> TemplateProfileRow | None:
-    """Treat ``raw`` as a UUID first, then as a name within the tenant.
+    """Resolve ``raw`` to a TemplateProfileRow by UUID or exact name.
 
-    Accepting both lets the caller stay agnostic of the template id:
-    report_bot ships with ``template_id="DXDesignSystem"`` which
-    resolves by name. If the same name maps to multiple rows (rename
-    + re-upload), pick the newest — almost always what the caller
-    meant.
+    Two-strategy lookup:
+      1. Treat ``raw`` as a UUID and match on the primary key.
+      2. Fall back to a **case-sensitive exact** match on ``name``.
+
+    Deliberately no case-insensitive / partial / ilike fallback —
+    historically that caused a silent mis-resolution when the caller
+    sent the wrong name and a sister template happened to ilike-match:
+    the deck rendered against the wrong template's theme.xml, so the
+    body palette came out cyan even though the chrome was purple.
+
+    If the same name maps to multiple rows (operator re-uploaded under
+    the same display name), pick the newest — that's almost always
+    what was meant.
     """
     try:
         UUID(raw)
@@ -319,21 +333,12 @@ def _resolve_template(
     except ValueError:
         pass
 
-    row = (
+    return (
         db.query(TemplateProfileRow)
         .filter(
             TemplateProfileRow.tenant_id == tenant_id,
             TemplateProfileRow.name == raw,
         )
-        .order_by(TemplateProfileRow.created_at.desc())
-        .first()
-    )
-    if row is not None:
-        return row
-    return (
-        db.query(TemplateProfileRow)
-        .filter(TemplateProfileRow.tenant_id == tenant_id)
-        .filter(TemplateProfileRow.name.ilike(raw))
         .order_by(TemplateProfileRow.created_at.desc())
         .first()
     )

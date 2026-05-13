@@ -95,7 +95,7 @@ GET  <ApiEndpoint>/api/v1/external/slides/{project_id} → 200 (poll)
 # POST body
 {
   "title": "週次レポート要約",
-  "template_id": "DXDesignSystem",     # UUID または display name
+  "template_id": "DXデザインシステム株式会社",     # UUID または display name (完全一致, 大文字小文字を区別)
   "report_markdown": "## 今週の出来事\n- ...",
   "source_url": "https://example.com/weekly/2026-05"  # optional, LLM への補助コンテキスト
 }
@@ -182,7 +182,7 @@ PROJECT_ID=$(curl -s -X POST "$API_ENDPOINT/api/v1/external/slides" \
   -H "Content-Type: application/json" \
   -d '{
         "title": "週次レポート要約",
-        "template_id": "DXDesignSystem",
+        "template_id": "DXデザインシステム株式会社",
         "report_markdown": "## 今週の出来事\n- A\n- B\n- C"
       }' \
   | jq -r .project_id)
@@ -203,7 +203,7 @@ done
 
 ### 3) 動作仕様メモ
 
-- `template_id` は UUID でも表示名でも可。同名が複数あれば最新を優先。
+- `template_id` は UUID でも **表示名 (完全一致, 大文字小文字を区別)** でも可。同名が複数あれば最新を優先。曖昧マッチ (ilike / 部分一致) は事故防止のため不可 — 名前のタイポ / 半角全角揺れがあると `status: "error"` で素直に弾きます。
 - 認証は Web ユーザトークンと M2M トークン両方を同じ user pool / JWKS で検証。M2M トークンの `slides:create` scope では Web 用エンドポイントは叩けないので、外部サービスは `/api/v1/external/*` のみ利用してください。
 - 作成プロジェクトの `owner_user_id` は呼び出し元 client_id。Web UI の「自分のプロジェクト」には現れません。
 - `Idempotency-Key` ヘッダは Phase 1 では受理して無視（夢の Phase 2 で本物の dedupe を実装する用のフック）。
