@@ -1,28 +1,27 @@
-"""External integration API.
+"""External integration API (async polling design).
 
-Single-shot "markdown report in, slide URLs out" endpoint for service-to-
-service callers (e.g. report_bot on Cloud Run that posts the rendered
-deck back to Google Chat). The user-facing flow is multi-step on purpose
-(draft → blueprint → tweak → render → export); this collapses it into
-one call:
+For service-to-service callers (report_bot on Cloud Run that posts the
+rendered deck back to Google Chat). The user-facing flow is multi-step
+on purpose (draft → blueprint → tweak → render → export); this collapses
+it into a single submit + poll pair:
 
-  1. Resolve or look up the template
-  2. Create a project owned by the calling client
-  3. Generate the blueprint inline (no SQS hop — we're going to wait
-     anyway, and the LLM call fits inside the worker's 5-minute budget)
-  4. Submit render to the existing SQS queue
-  5. Poll ProjectRow.status until "complete" / "partial" / "failed"
-  6. Return presigned S3 URLs to the .pptx / .pdf / preview PNGs
+  POST /api/v1/external/slides       → 202 queued
+  GET  /api/v1/external/slides/{id}  → queued / rendering / done / error
 
-Auth: requires a Cognito access token issued via the client_credentials
-grant with scope `slideforge-api/slides:create`. See README →
-"外部サービスからの呼び出し方".
+The synchronous wait=True path used to live here but blueprint LLM call
++ render (~30-90s combined) overruns API Gateway HTTP API's 30s
+integration timeout, so the request returned 503 even when the job
+eventually succeeded. The polling design moves all the work onto the
+SQS-driven blueprint + render workers.
+
+Auth: a Cognito access token issued via client_credentials grant with
+scope `slideforge-api/slides:create`. See README → "外部サービスからの
+呼び出し方".
 """
 
 from __future__ import annotations
 
 import logging
-import time
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -33,23 +32,17 @@ from sqlalchemy.orm import Session
 from ..auth import current_user_id, require_scope, require_tenant
 from ..config import get_settings
 from ..models.db import (
+    BlueprintJobRow,
     BlueprintRow,
     ProjectRow,
     TemplateProfileRow,
     get_session,
-    new_session,
 )
-from ..services.blueprint_builder import BlueprintBuildError, build_blueprint
-from ..services.llm import LLMClient
-from ..services.queue import RenderQueue
+from ..services.queue import BlueprintQueue
 from ..services.storage import Storage
-from ..services.template_analyzer import analyze_template
 
 log = logging.getLogger("slideforge.external")
 
-# Re-uses the API's existing scope-check dependency. The required scope
-# string is taken from settings so a local-dev / pytest run with no
-# EXTERNAL_API_REQUIRED_SCOPE env var falls back to the production value.
 _require_external_scope = require_scope(
     get_settings().external_api_required_scope
 )
@@ -57,49 +50,68 @@ _require_external_scope = require_scope(
 router = APIRouter(prefix="/api/v1/external", tags=["external"])
 
 
+# Stable response schema for both POST and GET. report_bot keys off the
+# field names directly, so additions are fine but renames / removals
+# are breaking changes — bump /api/v2/ when that day comes.
+ExternalStatus = Literal["queued", "blueprint", "rendering", "done", "error"]
+
+
 class ExternalSlideRequest(BaseModel):
     title: str = Field(min_length=1, max_length=200)
-    # Accepts either the template UUID or its display name (case-sensitive
-    # exact match within the calling tenant). The default lets the
-    # report_bot caller stay agnostic of the UUID — operations replace
-    # the template under the same name without code changes.
+    # Accepts the template UUID or its display name (exact match, then
+    # case-insensitive fallback, newest-wins on duplicates). report_bot
+    # ships with the production template name so it stays agnostic of
+    # the underlying UUID across re-uploads.
     template_id: str = Field(default="DXDesignSystem", min_length=1)
     report_markdown: str = Field(min_length=1)
     source_url: str | None = None
-    wait: bool = True
-    # Hard ceiling — render rarely exceeds 90s even for 20-slide decks,
-    # so 180s leaves headroom for blueprint + render combined. The
-    # caller can crank this to ~300s for unusually large reports; above
-    # that, switch to wait=False and poll separately.
-    timeout_sec: int = Field(default=180, ge=10, le=600)
 
 
 class ExternalSlideResponse(BaseModel):
-    project_id: UUID
-    status: Literal["done", "pending", "error"]
+    project_id: str
+    status: ExternalStatus
     pptx_url: str | None = None
     pdf_url: str | None = None
     preview_urls: list[str] | None = None
     error: str | None = None
 
 
-@router.post("/slides", response_model=ExternalSlideResponse)
+@router.post("/slides", response_model=ExternalSlideResponse, status_code=202)
 def create_slides(
     body: ExternalSlideRequest,
     tenant_id: str = Depends(require_tenant),
     user_id: str = Depends(current_user_id),
     _scope: dict = Depends(_require_external_scope),
     db: Session = Depends(get_session),
-    # Idempotency-Key is forwarded by report_bot when retrying after a
-    # transport hiccup. We don't dedupe in Phase 1 (would need a new
-    # table); the header is accepted-but-ignored so callers can wire it
-    # in now and we just turn it on later without an API break.
+    # Idempotency-Key is forwarded by report_bot on retry; accepted-
+    # but-ignored in Phase 1. A new table is needed for real dedupe and
+    # we don't want to add one yet — the header is wired here so the
+    # caller can adopt it now and we just turn dedupe on without an API
+    # change later.
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> ExternalSlideResponse:
+    """Submit a markdown report for rendering. Returns immediately.
+
+    Always 202; failures map to 200 + status="error" in the GET (never
+    5xx for application errors) so the caller's polling logic doesn't
+    need separate transport-error branches.
+    """
     template = _resolve_template(db, body.template_id, tenant_id)
     if template is None:
+        # Lookup failure surfaces synchronously — the alternative is
+        # writing a "failed" job to the DB just so the GET can report
+        # it, which adds noise. report_bot can branch on
+        # status="error" returned right here, same as any other error
+        # path, so the contract stays uniform.
+        log.warning(
+            "external slides: template %r not found (tenant=%s)",
+            body.template_id, tenant_id,
+        )
+        # project_id of all-zeros is a recognizable sentinel so the
+        # caller can tell "we never created anything" apart from
+        # "created but error mid-flight".
         return ExternalSlideResponse(
-            project_id=UUID(int=0),
+            project_id=str(UUID(int=0)),
             status="error",
             error=f"template not found: {body.template_id!r}",
         )
@@ -113,53 +125,172 @@ def create_slides(
         status="draft",
     )
     db.add(project)
+    db.flush()  # allocate id before referencing it from the job row
+
+    job = BlueprintJobRow(
+        id=str(uuid4()),
+        project_id=project.id,
+        tenant_id=tenant_id,
+        status="pending",
+    )
+    db.add(job)
     db.commit()
-    db.refresh(project)
+
+    BlueprintQueue().submit(
+        {
+            "job_id": job.id,
+            "project_id": project.id,
+            "tenant_id": tenant_id,
+            "user_intent": _compose_intent(body),
+            "required_sections": [],
+            "aux_context": body.source_url,
+            # Tells blueprint_worker to chain a render job onto SQS as
+            # soon as the blueprint commits. Web UI jobs don't set this
+            # — the user clicks "render" themselves after reviewing.
+            "auto_render": True,
+        }
+    )
     log.info(
-        "external project created project=%s tenant=%s caller=%s idem=%s",
-        project.id, tenant_id, user_id, idempotency_key,
+        "external slides queued project=%s job=%s caller=%s idem=%s",
+        project.id, job.id, user_id, idempotency_key,
     )
 
-    try:
-        bp_row = _generate_blueprint_inline(
-            db=db,
-            project=project,
-            template=template,
-            user_intent=_compose_intent(body),
-            aux_context=body.source_url,
+    return ExternalSlideResponse(
+        project_id=project.id,
+        status="queued",
+    )
+
+
+@router.get("/slides/{project_id}", response_model=ExternalSlideResponse)
+def get_slides_status(
+    project_id: str,
+    tenant_id: str = Depends(require_tenant),
+    _user_id: str = Depends(current_user_id),
+    _scope: dict = Depends(_require_external_scope),
+    db: Session = Depends(get_session),
+) -> ExternalSlideResponse:
+    """Poll for completion. Always 200; the `status` field carries the state.
+
+    The error path returns the same 200 shape so report_bot can branch
+    on a single field instead of mixing HTTP status code handling with
+    response parsing.
+    """
+    project = (
+        db.query(ProjectRow)
+        .filter(
+            ProjectRow.id == project_id,
+            ProjectRow.tenant_id == tenant_id,
         )
-    except BlueprintBuildError as e:
+        .one_or_none()
+    )
+    if project is None:
         return ExternalSlideResponse(
-            project_id=UUID(project.id),
+            project_id=project_id,
             status="error",
-            error=f"blueprint failed: {e}",
+            error="project not found",
         )
 
-    if not body.wait:
-        return ExternalSlideResponse(
-            project_id=UUID(project.id),
-            status="pending",
-        )
+    # Latest blueprint job for the project. There's only ever one for
+    # the external API (POST creates one and we never re-fire), but
+    # order-by-created keeps things sane if someone wires up a retry
+    # path later.
+    job = (
+        db.query(BlueprintJobRow)
+        .filter(BlueprintJobRow.project_id == project_id)
+        .order_by(BlueprintJobRow.created_at.desc())
+        .first()
+    )
+
+    status, error = _derive_status(project, job)
+    response = ExternalSlideResponse(
+        project_id=project.id,
+        status=status,
+        error=error,
+    )
+    if status == "done":
+        _attach_download_urls(response, db, project)
+    return response
+
+
+# -------- helpers --------
+
+
+def _derive_status(
+    project: ProjectRow, job: BlueprintJobRow | None
+) -> tuple[ExternalStatus, str | None]:
+    """Collapse (BlueprintJob.status, project.status) into a single state.
+
+    The two underlying rows are updated by different actors (blueprint
+    worker writes the job + flips project to "rendering"; render Lambda
+    writes the final project status), so the polling client wants one
+    canonical answer instead of having to reason about both.
+    """
+    # Blueprint hard-failed → terminal error. project.status will still
+    # be "draft" at this point because the render Lambda never ran.
+    if job is not None and job.status == "failed":
+        return "error", job.error_message or "blueprint failed"
+
+    # Render Lambda flips project.status to "failed" on its own
+    # terminal errors (e.g. LibreOffice crash). Treated identically to
+    # blueprint failure from the caller's perspective.
+    if project.status == "failed":
+        return "error", "render failed"
+
+    if project.status in ("complete", "partial"):
+        # "partial" means some slides rendered and some didn't. The
+        # caller still gets URLs (the rendered slides land in S3); the
+        # error field stays null because the deck is usable.
+        return "done", None
+
+    # Pre-render phase: blueprint job is the source of truth.
+    if job is None or job.status == "pending":
+        return "queued", None
+
+    # Blueprint complete, render in flight. project.status flips to
+    # "rendering" inside blueprint_worker._submit_render right after
+    # the SQS enqueue.
+    return "rendering", None
+
+
+def _attach_download_urls(
+    response: ExternalSlideResponse,
+    db: Session,
+    project: ProjectRow,
+) -> None:
+    """Populate pptx / pdf / preview URLs on a done response.
+
+    Generated per-request (not cached) so each poll returns fresh 24h
+    presigned URLs — important because report_bot can re-poll long
+    after the deck completed, e.g. if Google Chat retries on its end.
+    """
+    bp = (
+        db.query(BlueprintRow)
+        .filter(BlueprintRow.project_id == project.id)
+        .order_by(BlueprintRow.version.desc())
+        .first()
+    )
+    if bp is None:
+        # project.status="complete" without a BlueprintRow is a
+        # state-machine bug. Don't crash — just leave URLs null and let
+        # the operator see the inconsistency via CloudWatch.
+        log.error("project %s status=done but no blueprint row", project.id)
+        return
 
     storage = Storage()
-    _submit_render(storage, tenant_id, project, template, bp_row)
-
-    final_status = _wait_for_render(project.id, body.timeout_sec)
-    if final_status in ("complete", "partial"):
-        return _build_done_response(storage, tenant_id, project.id, bp_row)
-    if final_status == "failed":
-        return ExternalSlideResponse(
-            project_id=UUID(project.id),
-            status="error",
-            error="render failed (see CloudWatch for render Lambda errors)",
+    prefix = storage.output_prefix(project.tenant_id, project.id, bp.version)
+    # 24h presigned URLs so retries on the Google Chat side have plenty
+    # of time to download. SigV4 caps at 7 days but 24h is a sane
+    # middle ground — short enough that a leaked URL doesn't stay live
+    # forever, long enough for any reasonable retry budget.
+    expires = 24 * 3600
+    response.pptx_url = storage.presign_download(prefix + "output.pptx", expires=expires)
+    response.pdf_url = storage.presign_download(prefix + "output.pdf", expires=expires)
+    response.preview_urls = [
+        storage.presign_download(
+            f"{prefix}preview/slide-{i:02d}.jpg", expires=expires
         )
-    # Timed out — caller can poll /api/projects/{id} or re-issue with a
-    # larger timeout_sec.
-    return ExternalSlideResponse(
-        project_id=UUID(project.id),
-        status="pending",
-        error=f"render did not finish within {body.timeout_sec}s",
-    )
+        for i in range(1, len(bp.slides) + 1)
+    ]
 
 
 def _resolve_template(
@@ -167,12 +298,12 @@ def _resolve_template(
 ) -> TemplateProfileRow | None:
     """Treat ``raw`` as a UUID first, then as a name within the tenant.
 
-    Accepting both lets the external caller stay agnostic of the
-    template id: report_bot ships with ``template_id="DXDesignSystem"``,
-    which resolves by name as long as the template exists in the
-    tenant's catalog under that exact name.
+    Accepting both lets the caller stay agnostic of the template id:
+    report_bot ships with ``template_id="DXDesignSystem"`` which
+    resolves by name. If the same name maps to multiple rows (rename
+    + re-upload), pick the newest — almost always what the caller
+    meant.
     """
-    # UUID path
     try:
         UUID(raw)
         row = (
@@ -188,10 +319,6 @@ def _resolve_template(
     except ValueError:
         pass
 
-    # Name path — exact match wins, then a case-insensitive fallback so
-    # a caller passing "dxdesignsystem" still resolves. If a name was
-    # uploaded twice (rename + re-upload pattern), pick the most
-    # recent — it's almost always what the caller meant.
     row = (
         db.query(TemplateProfileRow)
         .filter(
@@ -213,206 +340,16 @@ def _resolve_template(
 
 
 def _compose_intent(body: ExternalSlideRequest) -> str:
-    """Build the LLM user_intent prompt from the request.
+    """Build the LLM user_intent prompt from the request body.
 
-    Blueprint builder expects a single freeform string. We concatenate
-    title + markdown so the LLM sees both the deck's stated purpose and
-    the underlying source material. The source_url, when present, is
-    forwarded as aux_context (kept separate so the LLM can cite it
-    rather than treat it as content).
+    Blueprint builder expects a single freeform string. We bundle
+    title + markdown so the LLM sees both the deck's stated purpose
+    and the source material. source_url is forwarded as aux_context
+    by the caller (kept separate so the LLM can cite it rather than
+    treat it as content).
     """
     return (
-        f"以下のレポートをスライドに変換してください。\n\n"
+        "以下のレポートをスライドに変換してください。\n\n"
         f"タイトル: {body.title}\n\n"
         f"レポート本文:\n{body.report_markdown}"
     )
-
-
-def _generate_blueprint_inline(
-    *,
-    db: Session,
-    project: ProjectRow,
-    template: TemplateProfileRow,
-    user_intent: str,
-    aux_context: str | None,
-) -> BlueprintRow:
-    """Run the blueprint LLM call on the request thread and persist the result.
-
-    Mirrors blueprint_worker._process but without the SQS / job-row
-    overhead — there's nothing to poll because we're going to wait
-    anyway. The render path downstream still goes through SQS.
-    """
-    # Lazy-analyze the template if it was uploaded but never inspected
-    # (would normally happen on first GET /api/templates/{id}).
-    if not template.layouts or not template.template_slide_count:
-        analysis = analyze_template(template.original_s3_path)
-        if analysis:
-            if analysis.slide_count:
-                template.template_slide_count = analysis.slide_count
-            if analysis.layouts:
-                template.layouts = analysis.layouts
-            if analysis.design_tokens:
-                merged = dict(template.design_tokens or {})
-                merged.update(analysis.design_tokens)
-                template.design_tokens = merged
-            db.commit()
-
-    template_summary = (
-        f"テンプレート名: {template.name}\n"
-        f"S3: {template.original_s3_path}\n"
-        f"総ページ数: {template.template_slide_count}\n"
-        f"構成: {_describe_layouts(template.layouts)}"
-    )
-
-    parsed = build_blueprint(
-        llm=LLMClient(),
-        user_intent=user_intent,
-        required_sections=[],
-        aux_context=aux_context,
-        template_summary=template_summary,
-    )
-
-    # Same template-slide-index assignment as the async worker. Kept
-    # local rather than imported because it's an implementation detail
-    # of how blueprints get rendered, not a public service.
-    _assign_template_mapping(parsed.get("slides") or [], template.layouts or [])
-
-    bp_row = BlueprintRow(
-        id=str(uuid4()),
-        project_id=project.id,
-        version=1,
-        title=parsed.get("title", project.name),
-        slides=parsed.get("slides", []),
-    )
-    db.add(bp_row)
-    db.commit()
-    db.refresh(bp_row)
-    log.info(
-        "external blueprint generated project=%s blueprint=%s slides=%d",
-        project.id, bp_row.id, len(bp_row.slides),
-    )
-    return bp_row
-
-
-def _submit_render(
-    storage: Storage,
-    tenant_id: str,
-    project: ProjectRow,
-    template: TemplateProfileRow,
-    bp: BlueprintRow,
-) -> None:
-    """Submit the render job to SQS and flip project.status to "rendering"."""
-    out_prefix = storage.output_prefix(tenant_id, project.id, bp.version)
-    RenderQueue().submit(
-        {
-            "job_id": str(uuid4()),
-            "tenant_id": tenant_id,
-            "project_id": project.id,
-            "template_s3": template.original_s3_path,
-            "blueprint": {"title": bp.title, "slides": bp.slides},
-            "template_layouts": list(template.layouts or []),
-            "design_tokens": dict(template.design_tokens or {}),
-            "out_prefix": storage.as_uri(out_prefix),
-        }
-    )
-    # Best-effort status flip so the projects list shows the external
-    # job as in-flight. The render Lambda's db_status writer will move
-    # it to "complete" / "partial" / "failed".
-    project.status = "rendering"
-
-
-def _wait_for_render(project_id: str, timeout_sec: int) -> str | None:
-    """Poll ProjectRow.status until the render Lambda flips it.
-
-    Uses a fresh session per poll so the SQLAlchemy session doesn't
-    keep the row cached at the original "rendering" value (the render
-    Lambda commits via a separate connection). Returns the final status
-    string, or None if the timeout elapses while it's still
-    "rendering".
-    """
-    terminal = {"complete", "partial", "failed"}
-    deadline = time.monotonic() + timeout_sec
-    # Start with short pings and back off — most renders finish in 30-90s.
-    delay = 2.0
-    while time.monotonic() < deadline:
-        time.sleep(delay)
-        db = new_session()
-        try:
-            row = (
-                db.query(ProjectRow).filter(ProjectRow.id == project_id).one_or_none()
-            )
-            if row is None:
-                return "failed"
-            if row.status in terminal:
-                return row.status
-        finally:
-            db.close()
-        # Cap at 5s — render finishes within a single API Gateway
-        # request budget regardless of poll cadence; keep it responsive.
-        delay = min(delay * 1.5, 5.0)
-    return None
-
-
-def _build_done_response(
-    storage: Storage, tenant_id: str, project_id: str, bp: BlueprintRow
-) -> ExternalSlideResponse:
-    prefix = storage.output_prefix(tenant_id, project_id, bp.version)
-    # 24h presigned URLs so the consumer (Google Chat webhook + any
-    # downstream retries) has plenty of time to download or relay them.
-    pptx_url = storage.presign_download(prefix + "output.pptx", expires=24 * 3600)
-    pdf_url = storage.presign_download(prefix + "output.pdf", expires=24 * 3600)
-    previews = [
-        storage.presign_download(
-            f"{prefix}preview/slide-{i:02d}.jpg", expires=24 * 3600
-        )
-        for i in range(1, len(bp.slides) + 1)
-    ]
-    return ExternalSlideResponse(
-        project_id=UUID(project_id),
-        status="done",
-        pptx_url=pptx_url,
-        pdf_url=pdf_url,
-        preview_urls=previews,
-    )
-
-
-def _describe_layouts(layouts: list[dict]) -> str:
-    if not layouts:
-        return "(未分類)"
-    return ", ".join(
-        f"#{int(layout.get('index', i + 1))} {layout.get('layout', 'content')}"
-        for i, layout in enumerate(layouts)
-    )
-
-
-def _assign_template_mapping(
-    blueprint_slides: list[dict],
-    template_layouts: list[dict],
-) -> None:
-    """Same algorithm as blueprint_worker — kept duplicated rather than
-    imported so the worker and external paths don't grow a shared
-    helpers module just for this. If a third caller appears, lift it
-    out then."""
-    if not template_layouts:
-        return
-    by_type: dict[str, list[int]] = {}
-    for entry in template_layouts:
-        by_type.setdefault(entry.get("layout", "content"), []).append(
-            int(entry.get("index", 0))
-        )
-    content_pages = by_type.get("content") or []
-    total = max((int(entry.get("index", 0)) for entry in template_layouts), default=0)
-    if total <= 0:
-        return
-    counters: dict[str, int] = {}
-    for i, slide in enumerate(blueprint_slides):
-        if isinstance(slide.get("template_slide_index"), int):
-            continue
-        want = slide.get("layout", "content")
-        candidates = by_type.get(want) or content_pages
-        if not candidates:
-            slide["template_slide_index"] = (i % total) + 1
-            continue
-        c = counters.get(want, 0)
-        slide["template_slide_index"] = candidates[c % len(candidates)]
-        counters[want] = c + 1

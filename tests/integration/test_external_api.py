@@ -1,23 +1,22 @@
 """
-Integration tests for POST /api/v1/external/slides.
+Integration tests for the async external integration API.
 
-Covers:
-  - happy path with wait=False (project + blueprint persisted, render
-    submitted to SQS, no polling)
-  - happy path with wait=True (RenderQueue stub flips project status to
-    "complete" so the wait loop returns presigned URLs)
-  - template lookup by display name (default report_bot input)
-  - bad template returns status="error" instead of a 4xx so the caller's
-    branching logic stays simple
+Flow under test:
+  POST /api/v1/external/slides       → 202 + status=queued
+  [blueprint_worker runs from SQS]   → BlueprintRow written, render SQS msg enqueued, project.status=rendering
+  GET .../slides/{project_id}        → status=rendering
+  [render Lambda completes]          → project.status=complete
+  GET .../slides/{project_id}        → status=done + presigned URLs
 
-The Cognito JWKS path is bypassed via ENV=local (api.auth.cognito
-returns a stub claim dict that satisfies the slides:create scope
-requirement). A separate unit test covers the scope check itself.
+Render Lambda + LLM are stubbed; blueprint_worker is driven manually
+from the captured SQS message (same trick the existing test_e2e_flow
+uses). ENV=local bypasses Cognito but emits a claim that satisfies the
+slides:create scope check.
 """
 
 from __future__ import annotations
 
-import json as _json
+import json
 import os
 import tempfile
 from unittest.mock import patch
@@ -25,8 +24,8 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-# File-backed sqlite so the request thread + the wait_for_render thread
-# see the same schema. (:memory: is per-connection.)
+# File-backed sqlite so the worker (driven manually) and the request
+# thread see the same schema. :memory: is per-connection.
 _DB_FILE_PATH = tempfile.mkstemp(suffix=".db")[1]
 os.environ["ENV"] = "local"
 os.environ["DB_URL"] = f"sqlite:///{_DB_FILE_PATH}"
@@ -35,6 +34,10 @@ os.environ["AWS_REGION"] = "us-east-1"
 os.environ["RENDER_QUEUE_URL"] = "https://sqs.us-east-1.amazonaws.com/111111111111/render-test"
 os.environ["BLUEPRINT_QUEUE_URL"] = "https://sqs.us-east-1.amazonaws.com/111111111111/blueprint-test"
 os.environ["ANTHROPIC_API_KEY"] = "test"
+
+# Importing the worker triggers api.config.get_settings(); env must be
+# set first. Ruff would prefer this with the other imports up top.
+from api.blueprint_worker import handler as _bp_worker  # noqa: E402, I001
 
 
 FAKE_BLUEPRINT_JSON = """
@@ -94,7 +97,6 @@ def _fake_boto3_client(service_name: str, **kwargs):  # type: ignore[no-untyped-
 
 @pytest.fixture()
 def client():  # type: ignore[no-untyped-def]
-    # Reset the SQS stub between tests so message counts don't leak.
     _FAKE_SQS.messages.clear()
     from api.config import get_settings
     get_settings.cache_clear()
@@ -102,11 +104,11 @@ def client():  # type: ignore[no-untyped-def]
     with (
         patch("boto3.client", side_effect=_fake_boto3_client),
         patch("api.services.llm.LLMClient.blueprint", side_effect=_fake_blueprint),
-        # template_analyzer.analyze_template hits S3 to download the
-        # uploaded .pptx; the file doesn't actually exist in the fake.
-        # The router falls back to an empty layouts list when analyze
-        # returns None, so stub it that way.
-        patch("api.routers.external.analyze_template", return_value=None),
+        # template_analyzer hits S3 to inspect the uploaded .pptx; the
+        # fake S3 doesn't have get_object. Stub it to return None so
+        # the worker falls back to empty layouts (good enough for the
+        # state-machine tests; render content is out of scope here).
+        patch("api.blueprint_worker.analyze_template", return_value=None),
     ):
         from api.main import app
         from api.models.db import init_db
@@ -116,14 +118,37 @@ def client():  # type: ignore[no-untyped-def]
             yield c
 
 
+def _render_messages() -> list[dict]:
+    return [m for m in _FAKE_SQS.messages if "render-test" in m["QueueUrl"]]
+
+
+def _blueprint_messages() -> list[dict]:
+    return [m for m in _FAKE_SQS.messages if "blueprint-test" in m["QueueUrl"]]
+
+
 def _create_template(client: TestClient, name: str = "DXDesignSystem") -> str:
-    """Helper: create a template the M2M endpoint can look up by name."""
     r = client.post("/api/templates", params={"name": name})
     assert r.status_code == 200, r.text
     return r.json()["template_id"]
 
 
-def test_external_slides_wait_false(client: TestClient) -> None:
+def _drive_blueprint_worker() -> None:
+    """Pop the most recent blueprint SQS message and feed it to the worker.
+
+    Mirrors what the SQS event-source mapping does in prod. Caller is
+    expected to have just POSTed /api/v1/external/slides — the blueprint
+    message will be the latest entry in the captured SQS bus.
+    """
+    bp_msgs = _blueprint_messages()
+    assert bp_msgs, "no blueprint SQS message captured"
+    body = json.loads(bp_msgs[-1]["MessageBody"])
+    _bp_worker({"Records": [{"body": json.dumps(body)}]}, None)
+
+
+# -------- tests --------
+
+
+def test_post_returns_202_and_queues_blueprint(client: TestClient) -> None:
     _create_template(client)
 
     r = client.post(
@@ -131,69 +156,90 @@ def test_external_slides_wait_false(client: TestClient) -> None:
         json={
             "title": "週次レポート要約",
             "template_id": "DXDesignSystem",
-            "report_markdown": "## 今週の出来事\n- A\n- B\n- C",
-            "source_url": "https://example.com/weekly/2026-05",
-            "wait": False,
+            "report_markdown": "## summary\n- a",
         },
     )
-    assert r.status_code == 200, r.text
+    assert r.status_code == 202, r.text
     body = r.json()
-    assert body["status"] == "pending"
+    assert body["status"] == "queued"
     assert body["project_id"]
-    # wait=False short-circuits before submitting the render job — only
-    # the blueprint was generated, no SQS render submission.
-    render_msgs = [m for m in _FAKE_SQS.messages if "render-test" in m["QueueUrl"]]
-    assert render_msgs == []
+    assert body["pptx_url"] is None
+    assert body["pdf_url"] is None
+    assert body["preview_urls"] is None
+    assert body["error"] is None
 
-    # The project + blueprint must actually be persisted so a follow-up
-    # GET /api/projects/{id} returns them.
-    r = client.get(f"/api/projects/{body['project_id']}/blueprint")
-    assert r.status_code == 200, r.text
-    assert r.json()["title"] == "週次レポート要約"
+    # Exactly one blueprint job enqueued, with auto_render set so the
+    # worker chains a render after blueprint commit.
+    bp_msgs = _blueprint_messages()
+    assert len(bp_msgs) == 1
+    enqueued = json.loads(bp_msgs[0]["MessageBody"])
+    assert enqueued["auto_render"] is True
+    assert enqueued["project_id"] == body["project_id"]
+
+    # No render job yet — that happens inside the worker.
+    assert _render_messages() == []
 
 
-def test_external_slides_wait_true_returns_urls(client: TestClient) -> None:
+def test_get_returns_queued_before_worker_runs(client: TestClient) -> None:
     _create_template(client)
+    r = client.post(
+        "/api/v1/external/slides",
+        json={"title": "t", "template_id": "DXDesignSystem", "report_markdown": "x"},
+    )
+    project_id = r.json()["project_id"]
 
-    # Simulate the render Lambda completing: replace RenderQueue.submit
-    # so it flips the row to "complete" in the same DB the wait loop
-    # polls against. That way the wait loop terminates inside the test
-    # without an actual SQS consumer.
+    r = client.get(f"/api/v1/external/slides/{project_id}")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "queued"
+
+
+def test_worker_chains_render_and_flips_to_rendering(client: TestClient) -> None:
+    _create_template(client)
+    r = client.post(
+        "/api/v1/external/slides",
+        json={"title": "t", "template_id": "DXDesignSystem", "report_markdown": "x"},
+    )
+    project_id = r.json()["project_id"]
+
+    _drive_blueprint_worker()
+
+    # Worker submitted a render job and flipped the project status.
+    render_msgs = _render_messages()
+    assert len(render_msgs) == 1
+    render_payload = json.loads(render_msgs[0]["MessageBody"])
+    assert render_payload["project_id"] == project_id
+    assert render_payload["blueprint"]["title"] == "週次レポート要約"
+
+    # GET now reports "rendering".
+    r = client.get(f"/api/v1/external/slides/{project_id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "rendering"
+    assert body["pptx_url"] is None
+
+
+def test_get_returns_done_with_urls_when_render_completes(client: TestClient) -> None:
+    _create_template(client)
+    r = client.post(
+        "/api/v1/external/slides",
+        json={"title": "t", "template_id": "DXDesignSystem", "report_markdown": "x"},
+    )
+    project_id = r.json()["project_id"]
+
+    _drive_blueprint_worker()
+
+    # Simulate the render Lambda finishing: flip project.status to
+    # "complete" directly in the DB, same DB the GET handler reads.
     from api.models.db import ProjectRow, new_session
-    from api.services.queue import RenderQueue
+    db = new_session()
+    try:
+        row = db.query(ProjectRow).filter(ProjectRow.id == project_id).one()
+        row.status = "complete"
+        db.commit()
+    finally:
+        db.close()
 
-    original_submit = RenderQueue.submit
-
-    def _submit_and_complete(self, job: dict) -> str:
-        result = original_submit(self, job)
-        db = new_session()
-        try:
-            row = (
-                db.query(ProjectRow)
-                .filter(ProjectRow.id == job["project_id"])
-                .one()
-            )
-            row.status = "complete"
-            db.commit()
-        finally:
-            db.close()
-        return result
-
-    with patch.object(RenderQueue, "submit", _submit_and_complete):
-        r = client.post(
-            "/api/v1/external/slides",
-            json={
-                "title": "週次レポート要約",
-                "template_id": "DXDesignSystem",
-                "report_markdown": "## summary\n- a",
-                "wait": True,
-                # Shrink the timeout so the test fails fast if the
-                # stub isn't doing its job — real wait_for_render
-                # backoff is 2s, 3s, …, so 30s gives plenty of room
-                # while still catching a stuck poller.
-                "timeout_sec": 30,
-            },
-        )
+    r = client.get(f"/api/v1/external/slides/{project_id}")
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "done", body
@@ -201,87 +247,141 @@ def test_external_slides_wait_true_returns_urls(client: TestClient) -> None:
     assert body["pdf_url"].endswith("output.pdf?sig=fake&op=get_object")
     # FAKE_BLUEPRINT_JSON has 2 slides → 2 preview URLs.
     assert len(body["preview_urls"]) == 2
+    assert body["error"] is None
 
 
-def test_external_slides_unknown_template_returns_error_status(client: TestClient) -> None:
-    # No template created — name lookup should fail.
+def test_get_returns_error_when_render_fails(client: TestClient) -> None:
+    _create_template(client)
+    r = client.post(
+        "/api/v1/external/slides",
+        json={"title": "t", "template_id": "DXDesignSystem", "report_markdown": "x"},
+    )
+    project_id = r.json()["project_id"]
+
+    _drive_blueprint_worker()
+
+    from api.models.db import ProjectRow, new_session
+    db = new_session()
+    try:
+        row = db.query(ProjectRow).filter(ProjectRow.id == project_id).one()
+        row.status = "failed"
+        db.commit()
+    finally:
+        db.close()
+
+    r = client.get(f"/api/v1/external/slides/{project_id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "error"
+    assert "render failed" in body["error"]
+
+
+def test_get_returns_error_when_blueprint_fails(client: TestClient) -> None:
+    _create_template(client)
+    r = client.post(
+        "/api/v1/external/slides",
+        json={"title": "t", "template_id": "DXDesignSystem", "report_markdown": "x"},
+    )
+    project_id = r.json()["project_id"]
+
+    # Mark the blueprint job as failed directly — equivalent to the
+    # worker's _mark_failed path after BlueprintBuildError retries.
+    from api.models.db import BlueprintJobRow, new_session
+    db = new_session()
+    try:
+        job = (
+            db.query(BlueprintJobRow)
+            .filter(BlueprintJobRow.project_id == project_id)
+            .one()
+        )
+        job.status = "failed"
+        job.error_message = "LLM returned unparseable JSON"
+        db.commit()
+    finally:
+        db.close()
+
+    r = client.get(f"/api/v1/external/slides/{project_id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "error"
+    assert body["error"] == "LLM returned unparseable JSON"
+
+
+def test_get_unknown_project_returns_error(client: TestClient) -> None:
+    r = client.get("/api/v1/external/slides/00000000-0000-0000-0000-000000000000")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "error"
+    assert "project not found" in body["error"]
+
+
+def test_post_unknown_template_returns_error_synchronously(client: TestClient) -> None:
     r = client.post(
         "/api/v1/external/slides",
         json={
-            "title": "test",
+            "title": "t",
             "template_id": "NonExistent",
-            "report_markdown": "body",
-            "wait": False,
+            "report_markdown": "x",
         },
     )
-    assert r.status_code == 200, r.text
+    # The synchronous error path is the one exception to the
+    # "always 202 from POST" rule: failing template lookup means we
+    # never created a project, so there's nothing to poll. Return
+    # 202 anyway with status=error so the response shape stays
+    # uniform with the rest of the polling flow.
+    assert r.status_code == 202, r.text
     body = r.json()
     assert body["status"] == "error"
     assert "template not found" in body["error"]
+    # No SQS submission happened.
+    assert _blueprint_messages() == []
 
 
-def test_external_slides_template_by_uuid(client: TestClient) -> None:
+def test_post_template_by_uuid(client: TestClient) -> None:
     template_id = _create_template(client, name="OtherTemplate")
     r = client.post(
         "/api/v1/external/slides",
         json={
-            "title": "uuid path",
+            "title": "t",
             "template_id": template_id,
-            "report_markdown": "body",
-            "wait": False,
+            "report_markdown": "x",
         },
     )
-    assert r.status_code == 200, r.text
-    assert r.json()["status"] == "pending"
+    assert r.status_code == 202
+    assert r.json()["status"] == "queued"
 
 
-def test_external_slides_idempotency_header_accepted(client: TestClient) -> None:
-    """Idempotency-Key is accepted-but-ignored in Phase 1.
-
-    Verifies the header doesn't trigger a validation error — when we
-    add dedupe in a later phase the integration test can be tightened
-    without touching report_bot.
-    """
+def test_idempotency_key_header_accepted(client: TestClient) -> None:
+    """Idempotency-Key header is accepted-but-ignored in Phase 1."""
     _create_template(client)
     r = client.post(
         "/api/v1/external/slides",
         json={
             "title": "idem",
             "template_id": "DXDesignSystem",
-            "report_markdown": "body",
-            "wait": False,
+            "report_markdown": "x",
         },
         headers={"Idempotency-Key": "abc-123"},
     )
-    assert r.status_code == 200, r.text
-    assert r.json()["status"] == "pending"
+    assert r.status_code == 202
+    assert r.json()["status"] == "queued"
 
 
 def test_require_scope_rejects_missing_scope() -> None:
-    """Direct unit test of the scope dependency.
-
-    ENV=local can't exercise this — the bypass returns a claim dict
-    that already includes the required scope — so we call the
-    dependency factory with a hand-crafted user dict instead. Confirms
-    a token without the slides:create scope is denied.
-    """
+    """Unit-level check that the scope dep rejects tokens missing the scope."""
     from fastapi import HTTPException
 
     from api.auth import require_scope
 
     dep = require_scope("slideforge-api/slides:create")
-
-    # Missing scope → 403.
     with pytest.raises(HTTPException) as exc:
         dep(user={"sub": "u1"})
     assert exc.value.status_code == 403
 
-    # Wrong scope → still 403.
     with pytest.raises(HTTPException) as exc:
         dep(user={"sub": "u1", "scope": "aws.cognito.signin.user.admin"})
     assert exc.value.status_code == 403
 
-    # Right scope (among others) → returns the user.
     user = dep(
         user={
             "sub": "u1",
@@ -290,11 +390,5 @@ def test_require_scope_rejects_missing_scope() -> None:
     )
     assert user["sub"] == "u1"
 
-    # Empty required_scope → check is disabled.
     permissive = require_scope("")
     assert permissive(user={"sub": "u1"}) == {"sub": "u1"}
-
-
-# Quiet "imported but unused" when this module is loaded in isolation —
-# the _json import is required by some sibling tests in the package.
-_ = _json
